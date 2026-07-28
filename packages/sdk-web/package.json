@@ -1,0 +1,51 @@
+{
+  "name": "@zinid/sdk-web",
+  "version": "0.0.0",
+  "description": "ZinID web SDK — embed, modal, and redirect verification flows for vendor sites.",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/zinid.cjs",
+  "module": "./dist/zinid.js",
+  "types": "./dist/zinid.d.ts",
+  "unpkg": "./dist/zinid.min.js",
+  "jsdelivr": "./dist/zinid.min.js",
+  "exports": {
+    ".": {
+      "types": "./dist/zinid.d.ts",
+      "import": "./dist/zinid.js",
+      "require": "./dist/zinid.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run && pnpm run size",
+    "test:watch": "vitest",
+    "size": "pnpm run build && size-limit"
+  },
+  "size-limit": [
+    {
+      "path": "dist/zinid.min.js",
+      "limit": "8 KB",
+      "gzip": true
+    }
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "//": "Zero runtime dependencies — the SDK uses only browser APIs. Keep `dependencies` empty.",
+  "dependencies": {},
+  "devDependencies": {
+    "@playwright/test": "^1.62.0",
+    "@size-limit/file": "^13.0.1",
+    "@types/node": "^26.1.2",
+    "jsdom": "^30.0.0",
+    "size-limit": "^13.0.1",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
+  }
+}

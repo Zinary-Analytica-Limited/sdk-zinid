@@ -1,0 +1,16 @@
+{
+  "includeCoAuthoredBy": false,
+  "permissions": {
+    "allow": [
+      "Bash(pnpm format *)",
+      "Bash(pnpm lint *)",
+      "Bash(pnpm typecheck *)",
+      "Bash(pnpm test *)",
+      "Bash(echo \"TEST_EXIT=$?\")",
+      "Bash(node -e \"const p=require\\('./packages/sdk-web/package.json'\\); console.log\\('dependencies:', JSON.stringify\\(p.dependencies\\), '| main:',p.main,'| module:',p.module,'| types:',p.types,'| unpkg:',p.unpkg,'| jsdelivr:',p.jsdelivr\\)\")",
+      "Bash(pnpm exec *)",
+      "Bash(echo \"LINT=$?\")",
+      "Bash(echo \"TYPECHECK=$?\")"
+    ]
+  }
+}
