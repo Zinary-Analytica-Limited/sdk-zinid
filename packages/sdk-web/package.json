@@ -24,7 +24,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run && pnpm run size",
     "test:watch": "vitest",
-    "size": "pnpm run build && size-limit"
+    "size": "pnpm run build && size-limit",
+    "test:e2e": "pnpm run build && playwright test"
   },
   "size-limit": [
     {

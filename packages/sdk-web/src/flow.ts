@@ -7,9 +7,11 @@
  * render is safe.
  */
 
-import { Channel, originFromUrl } from './channel';
+import { Channel, CLOSE_REQUEST, originFromUrl } from './channel';
+import type { ChannelOptions } from './channel';
 import { Emitter } from './emitter';
 import type {
+  ResizePayload,
   ZinIDEventHandler,
   ZinIDEventMap,
   ZinIDEventName,
@@ -29,6 +31,28 @@ const MODES: ZinIDFlowMode[] = ['embed', 'modal', 'redirect'];
 const IFRAME_ALLOW = 'camera; microphone';
 
 const IFRAME_TITLE = 'Identity verification';
+
+/**
+ * Starting height for an embedded frame, so it never renders at zero and
+ * flashes empty before the first settled measurement arrives.
+ */
+export const EMBED_INITIAL_HEIGHT = 480;
+
+/**
+ * Floor applied to every reported height. The hosted page has its own floor;
+ * this mirrors it rather than trusting it, so a momentary small measurement
+ * cannot collapse the frame.
+ */
+export const SDK_MIN_HEIGHT = 320;
+
+/** Modal holds a stable box and never resizes per message. */
+export const MODAL_HEIGHT = 520;
+
+/**
+ * The SDK owns the single animation: the iframe's height eases to each new
+ * measurement, while the hosted content just changes.
+ */
+const HEIGHT_TRANSITION = 'height 250ms ease';
 
 export interface ZinIDFlow {
   /** Subscribe to an event. Identical in effect to the matching `onX` option. */
@@ -53,7 +77,7 @@ function resolveContainer(target: HTMLElement | string): HTMLElement {
   return found as HTMLElement;
 }
 
-function createIframe(url: string, fill: boolean): HTMLIFrameElement {
+function createIframe(url: string, mode: ZinIDFlowMode): HTMLIFrameElement {
   const iframe = document.createElement('iframe');
   // The session URL is loaded exactly as the backend issued it. The SDK never
   // builds or rewrites a flow URL.
@@ -62,9 +86,13 @@ function createIframe(url: string, fill: boolean): HTMLIFrameElement {
   iframe.setAttribute('allow', IFRAME_ALLOW);
   // TODO(hardening): add a `sandbox` attribute once the hosted page's exact
   // requirements are known — the wrong token set silently breaks camera access.
-  iframe.style.cssText = fill
-    ? 'width:100%;height:100%;border:0;'
-    : 'width:100%;height:100%;min-height:100%;border:0;';
+  iframe.style.cssText =
+    mode === 'modal'
+      ? // A fixed box: the modal ignores resize entirely, and overflow scrolls
+        // internally rather than growing the frame.
+        `width:100%;height:${MODAL_HEIGHT}px;max-height:100%;border:0;display:block;`
+      : `width:100%;height:${EMBED_INITIAL_HEIGHT}px;border:0;display:block;` +
+        `transition:${HEIGHT_TRANSITION};`;
   return iframe;
 }
 
@@ -137,7 +165,7 @@ export function createFlow(options: ZinIDFlowOptions): ZinIDFlow {
    */
   function requestClose(): void {
     if (!channel || closeTimer !== undefined) return;
-    channel.post('close');
+    channel.post(CLOSE_REQUEST);
     closeTimer = setTimeout(() => {
       closeTimer = undefined;
       emitter.emit('error', {
@@ -146,6 +174,15 @@ export function createFlow(options: ZinIDFlowOptions): ZinIDFlow {
       });
       teardownUi();
     }, CLOSE_CONFIRM_TIMEOUT_MS);
+  }
+
+  /**
+   * Grow or shrink the embedded frame to the height the hosted page settled on,
+   * never below the floor. The CSS transition on the iframe animates it.
+   */
+  function applyResize(payload: ResizePayload): void {
+    if (!iframe) return;
+    iframe.style.height = `${Math.max(payload.height, SDK_MIN_HEIGHT)}px`;
   }
 
   // Registered once, up front: the hosted page's cancel is what actually closes
@@ -164,7 +201,7 @@ export function createFlow(options: ZinIDFlowOptions): ZinIDFlow {
 
     if (mode === 'modal') {
       overlay = createOverlay();
-      iframe = createIframe(options.url, true);
+      iframe = createIframe(options.url, 'modal');
       overlay.append(iframe);
       previousOverflow = document.body.style.overflow;
       document.body.style.overflow = 'hidden';
@@ -181,7 +218,7 @@ export function createFlow(options: ZinIDFlowOptions): ZinIDFlow {
         );
       }
       const container = resolveContainer(requested);
-      iframe = createIframe(options.url, false);
+      iframe = createIframe(options.url, mode);
       container.append(iframe);
     }
 
@@ -190,7 +227,11 @@ export function createFlow(options: ZinIDFlowOptions): ZinIDFlow {
       teardownUi();
       throw new Error('The verification iframe has no content window.');
     }
-    channel = new Channel({ emitter, origin, peer, scope: window });
+    const channelOptions: ChannelOptions = { emitter, origin, peer, scope: window };
+    // Only embed owns a frame that may grow. Modal holds a fixed box, so it
+    // never subscribes and an unwanted resize is ignored at the source.
+    if (mode === 'embed') channelOptions.onResize = applyResize;
+    channel = new Channel(channelOptions);
     channel.start();
   }
 

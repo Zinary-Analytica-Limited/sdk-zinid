@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Channel, originFromUrl } from './channel';
+import { Channel, CLOSE_REQUEST, originFromUrl } from './channel';
 import { Emitter } from './emitter';
 import type { ZinIDEventMap } from './types';
 
@@ -107,7 +107,7 @@ describe('Channel', () => {
       channel.start();
       channel.start();
 
-      deliver(message('ready'));
+      deliver(message('zinid:ready'));
 
       expect(handler).toHaveBeenCalledTimes(1);
     });
@@ -126,7 +126,7 @@ describe('Channel', () => {
       channel.start();
       channel.destroy();
 
-      deliver(message('ready'));
+      deliver(message('zinid:ready'));
 
       expect(handler).not.toHaveBeenCalled();
     });
@@ -151,7 +151,7 @@ describe('Channel', () => {
       channel.destroy();
       channel.start();
 
-      deliver(message('ready'));
+      deliver(message('zinid:ready'));
 
       expect(handler).toHaveBeenCalledTimes(1);
     });
@@ -166,7 +166,7 @@ describe('Channel', () => {
       const handler = vi.fn();
       emitter.on('ready', handler);
 
-      deliver(message('ready'));
+      deliver(message('zinid:ready'));
 
       expect(handler).toHaveBeenCalledTimes(1);
     });
@@ -175,7 +175,11 @@ describe('Channel', () => {
       const handler = vi.fn();
       emitter.on('ready', handler);
 
-      scope.dispatch({ origin: 'https://evil.example', source: peer, data: message('ready') });
+      scope.dispatch({
+        origin: 'https://evil.example',
+        source: peer,
+        data: message('zinid:ready'),
+      });
 
       expect(handler).not.toHaveBeenCalled();
     });
@@ -187,7 +191,7 @@ describe('Channel', () => {
       scope.dispatch({
         origin: 'https://verify.zinid.com.evil.example',
         source: peer,
-        data: message('ready'),
+        data: message('zinid:ready'),
       });
 
       expect(handler).not.toHaveBeenCalled();
@@ -200,7 +204,7 @@ describe('Channel', () => {
       scope.dispatch({
         origin: 'https://attacker.verify.zinid.com',
         source: peer,
-        data: message('ready'),
+        data: message('zinid:ready'),
       });
 
       expect(handler).not.toHaveBeenCalled();
@@ -210,7 +214,11 @@ describe('Channel', () => {
       const handler = vi.fn();
       emitter.on('ready', handler);
 
-      scope.dispatch({ origin: 'http://verify.zinid.com', source: peer, data: message('ready') });
+      scope.dispatch({
+        origin: 'http://verify.zinid.com',
+        source: peer,
+        data: message('zinid:ready'),
+      });
 
       expect(handler).not.toHaveBeenCalled();
     });
@@ -222,7 +230,7 @@ describe('Channel', () => {
       scope.dispatch({
         origin: 'https://verify.zinid.com:8443',
         source: peer,
-        data: message('ready'),
+        data: message('zinid:ready'),
       });
 
       expect(handler).not.toHaveBeenCalled();
@@ -233,7 +241,7 @@ describe('Channel', () => {
       const handler = vi.fn();
       emitter.on('ready', handler);
 
-      scope.dispatch({ origin: 'null', source: peer, data: message('ready') });
+      scope.dispatch({ origin: 'null', source: peer, data: message('zinid:ready') });
 
       expect(handler).not.toHaveBeenCalled();
     });
@@ -242,7 +250,7 @@ describe('Channel', () => {
       const handler = vi.fn();
       emitter.on('ready', handler);
 
-      scope.dispatch({ source: peer, data: message('ready') });
+      scope.dispatch({ source: peer, data: message('zinid:ready') });
 
       expect(handler).not.toHaveBeenCalled();
     });
@@ -262,7 +270,7 @@ describe('Channel', () => {
       scope.dispatch({
         origin: ORIGIN,
         source: impostor,
-        data: message('complete', COMPLETE_PAYLOAD),
+        data: message('zinid:complete', COMPLETE_PAYLOAD),
       });
 
       expect(handler).not.toHaveBeenCalled();
@@ -272,7 +280,7 @@ describe('Channel', () => {
       const handler = vi.fn();
       emitter.on('ready', handler);
 
-      scope.dispatch({ origin: ORIGIN, source: null, data: message('ready') });
+      scope.dispatch({ origin: ORIGIN, source: null, data: message('zinid:ready') });
 
       expect(handler).not.toHaveBeenCalled();
     });
@@ -288,9 +296,9 @@ describe('Channel', () => {
       ['undefined', undefined],
       ['a string', 'ready'],
       ['a number', 42],
-      ['an array', [{ source: 'zinid', type: 'ready' }]],
-      ['an object with no source tag', { type: 'ready' }],
-      ['an object tagged for another sender', { source: 'other-sdk', type: 'ready' }],
+      ['an array', [{ source: 'zinid', type: 'zinid:ready' }]],
+      ['an object with no source tag', { type: 'zinid:ready' }],
+      ['an object tagged for another sender', { source: 'other-sdk', type: 'zinid:ready' }],
       ['an object with a non-string type', { source: 'zinid', type: 7 }],
       ['an object with no type', { source: 'zinid' }],
     ];
@@ -311,9 +319,139 @@ describe('Channel', () => {
       const handler = vi.fn();
       emitter.on('error', handler);
 
-      deliver(message('teleported'));
+      deliver(message('zinid:teleported'));
 
       expect(handler).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('wire type namespacing', () => {
+    beforeEach(() => {
+      channel.start();
+    });
+
+    // Regression guard. The switch once matched the bare names while the hosted
+    // page sent the namespaced ones, so every inbound message fell through to
+    // default and the channel silently received nothing. Unit tests could not
+    // see it because they used the same wrong string on both sides — so these
+    // spell the canonical wire strings out as literals, never via a helper that
+    // could drift with the implementation.
+    const canonical: Array<[string, string, unknown]> = [
+      ['zinid:ready', 'ready', undefined],
+      ['zinid:cancel', 'cancel', undefined],
+      ['zinid:complete', 'complete', COMPLETE_PAYLOAD],
+      ['zinid:step_change', 'step_change', { step: 'document', index: 1, total: 3 }],
+      ['zinid:error', 'error', { code: 'camera_denied', message: 'No camera' }],
+    ];
+
+    it.each(canonical)('routes the wire type %s to the %s event', (wireType, event, payload) => {
+      const handler = vi.fn();
+      emitter.on(event as 'ready', handler);
+
+      deliver({ source: 'zinid', type: wireType, payload });
+
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    const bare = ['ready', 'cancel', 'complete', 'step_change', 'error', 'resize'];
+
+    it.each(bare)('ignores the unprefixed type %s', (wireType) => {
+      const handler = vi.fn();
+      const onError = vi.fn();
+      emitter.on(wireType === 'error' ? 'cancel' : 'ready', handler);
+      emitter.on('error', onError);
+
+      deliver({ source: 'zinid', type: wireType, payload: COMPLETE_PAYLOAD });
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(onError).not.toHaveBeenCalled();
+    });
+
+    it('still ignores a genuinely unknown namespaced type', () => {
+      // Forward compatibility: a newer hosted page may send types this SDK predates.
+      const onError = vi.fn();
+      emitter.on('error', onError);
+
+      deliver({ source: 'zinid', type: 'zinid:teleported', payload: { anything: true } });
+
+      expect(onError).not.toHaveBeenCalled();
+    });
+
+    it('sends the close request under its namespaced type', () => {
+      channel.post(CLOSE_REQUEST);
+
+      expect(peer.postMessage.mock.calls[0]?.[0]).toEqual({
+        source: 'zinid-sdk',
+        type: 'zinid:close',
+      });
+    });
+  });
+
+  describe('resize', () => {
+    it('reports a settled height to the resize consumer', () => {
+      const onResize = vi.fn();
+      const resizing = new Channel({ emitter, origin: ORIGIN, peer, scope, onResize });
+      resizing.start();
+
+      scope.dispatch({
+        origin: ORIGIN,
+        source: peer,
+        data: { source: 'zinid', type: 'zinid:resize', payload: { height: 640 } },
+      });
+
+      expect(onResize).toHaveBeenCalledWith({ height: 640 });
+      resizing.destroy();
+    });
+
+    it('does not emit resize as a vendor-facing event', () => {
+      const onError = vi.fn();
+      emitter.on('error', onError);
+      channel.start();
+
+      deliver({ source: 'zinid', type: 'zinid:resize', payload: { height: 640 } });
+
+      // No consumer configured for this channel, so nothing happens at all.
+      expect(onError).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['a missing payload', undefined],
+      ['a non-numeric height', { height: '640' }],
+      ['a NaN height', { height: Number.NaN }],
+      ['an infinite height', { height: Number.POSITIVE_INFINITY }],
+      ['no height at all', { width: 640 }],
+    ])('rejects %s as a malformed message', (_label, payload) => {
+      const onResize = vi.fn();
+      const onError = vi.fn();
+      emitter.on('error', onError);
+      const resizing = new Channel({ emitter, origin: ORIGIN, peer, scope, onResize });
+      resizing.start();
+
+      scope.dispatch({
+        origin: ORIGIN,
+        source: peer,
+        data: { source: 'zinid', type: 'zinid:resize', payload },
+      });
+
+      expect(onResize).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(onError.mock.calls[0]?.[0]).toMatchObject({ code: 'invalid_message' });
+      resizing.destroy();
+    });
+
+    it('applies the origin and source guards to resize too', () => {
+      const onResize = vi.fn();
+      const resizing = new Channel({ emitter, origin: ORIGIN, peer, scope, onResize });
+      resizing.start();
+
+      scope.dispatch({
+        origin: 'https://evil.example',
+        source: peer,
+        data: { source: 'zinid', type: 'zinid:resize', payload: { height: 640 } },
+      });
+
+      expect(onResize).not.toHaveBeenCalled();
+      resizing.destroy();
     });
   });
 
@@ -326,7 +464,7 @@ describe('Channel', () => {
       const handler = vi.fn();
       emitter.on('ready', handler);
 
-      deliver(message('ready'));
+      deliver(message('zinid:ready'));
 
       expect(handler).toHaveBeenCalledTimes(1);
     });
@@ -335,7 +473,7 @@ describe('Channel', () => {
       const handler = vi.fn();
       emitter.on('cancel', handler);
 
-      deliver(message('cancel'));
+      deliver(message('zinid:cancel'));
 
       expect(handler).toHaveBeenCalledTimes(1);
     });
@@ -344,7 +482,7 @@ describe('Channel', () => {
       const handler = vi.fn();
       emitter.on('complete', handler);
 
-      deliver(message('complete', COMPLETE_PAYLOAD));
+      deliver(message('zinid:complete', COMPLETE_PAYLOAD));
 
       expect(handler).toHaveBeenCalledTimes(1);
       expect(handler).toHaveBeenCalledWith(COMPLETE_PAYLOAD);
@@ -354,7 +492,9 @@ describe('Channel', () => {
       const handler = vi.fn();
       emitter.on('complete', handler);
 
-      deliver(message('complete', { session: { sessionId: 'sess_1', status }, type: 'identity' }));
+      deliver(
+        message('zinid:complete', { session: { sessionId: 'sess_1', status }, type: 'identity' }),
+      );
 
       expect(handler).toHaveBeenCalledTimes(1);
     });
@@ -363,7 +503,7 @@ describe('Channel', () => {
       const handler = vi.fn();
       emitter.on('step_change', handler);
 
-      deliver(message('step_change', { step: 'document', index: 1, total: 3 }));
+      deliver(message('zinid:step_change', { step: 'document', index: 1, total: 3 }));
 
       expect(handler).toHaveBeenCalledWith({ step: 'document', index: 1, total: 3 });
     });
@@ -372,7 +512,7 @@ describe('Channel', () => {
       const handler = vi.fn();
       emitter.on('error', handler);
 
-      deliver(message('error', { code: 'camera_denied', message: 'No camera access' }));
+      deliver(message('zinid:error', { code: 'camera_denied', message: 'No camera access' }));
 
       expect(handler).toHaveBeenCalledWith({ code: 'camera_denied', message: 'No camera access' });
     });
@@ -383,9 +523,9 @@ describe('Channel', () => {
       emitter.on('step_change', () => seen.push('step_change'));
       emitter.on('complete', () => seen.push('complete'));
 
-      deliver(message('ready'));
-      deliver(message('step_change', { step: 'selfie', index: 2, total: 3 }));
-      deliver(message('complete', COMPLETE_PAYLOAD));
+      deliver(message('zinid:ready'));
+      deliver(message('zinid:step_change', { step: 'selfie', index: 2, total: 3 }));
+      deliver(message('zinid:complete', COMPLETE_PAYLOAD));
 
       expect(seen).toEqual(['ready', 'step_change', 'complete']);
     });
@@ -402,27 +542,36 @@ describe('Channel', () => {
      * looking like a flow that silently stalls.
      */
     const malformed: Array<[string, unknown]> = [
-      ['complete with no payload', message('complete')],
-      ['complete with a null session', message('complete', { session: null, type: 'identity' })],
-      ['complete with no sessionId', message('complete', { session: { status: 'Approved' } })],
+      ['complete with no payload', message('zinid:complete')],
+      [
+        'complete with a null session',
+        message('zinid:complete', { session: null, type: 'identity' }),
+      ],
+      [
+        'complete with no sessionId',
+        message('zinid:complete', { session: { status: 'Approved' } }),
+      ],
       [
         'complete with a non-string sessionId',
-        message('complete', { session: { sessionId: 7, status: 'Approved' }, type: 'identity' }),
+        message('zinid:complete', {
+          session: { sessionId: 7, status: 'Approved' },
+          type: 'identity',
+        }),
       ],
       [
         'complete with a status outside the public union',
-        message('complete', {
+        message('zinid:complete', {
           session: { sessionId: 'sess_1', status: 'In Review' },
           type: 'identity',
         }),
       ],
-      ['step_change with no payload', message('step_change')],
+      ['step_change with no payload', message('zinid:step_change')],
       [
         'step_change with a non-number index',
-        message('step_change', { step: 'document', index: '1', total: 3 }),
+        message('zinid:step_change', { step: 'document', index: '1', total: 3 }),
       ],
-      ['error with no payload', message('error')],
-      ['error with a non-string code', message('error', { code: 7, message: 'boom' })],
+      ['error with no payload', message('zinid:error')],
+      ['error with a non-string code', message('zinid:error', { code: 7, message: 'boom' })],
     ];
 
     it.each(malformed)('emits an error event for %s', (_label, data) => {
@@ -441,7 +590,7 @@ describe('Channel', () => {
       emitter.on('complete', onComplete);
       emitter.on('error', vi.fn());
 
-      deliver(message('complete', { session: null, type: 'identity' }));
+      deliver(message('zinid:complete', { session: null, type: 'identity' }));
 
       expect(onComplete).not.toHaveBeenCalled();
     });
@@ -451,8 +600,8 @@ describe('Channel', () => {
       emitter.on('complete', onComplete);
       emitter.on('error', vi.fn());
 
-      deliver(message('complete', { session: null, type: 'identity' }));
-      deliver(message('complete', COMPLETE_PAYLOAD));
+      deliver(message('zinid:complete', { session: null, type: 'identity' }));
+      deliver(message('zinid:complete', COMPLETE_PAYLOAD));
 
       expect(onComplete).toHaveBeenCalledTimes(1);
       expect(onComplete).toHaveBeenCalledWith(COMPLETE_PAYLOAD);
@@ -463,7 +612,7 @@ describe('Channel', () => {
     it('posts to the peer using the exact expected origin', () => {
       channel.start();
 
-      channel.post('close');
+      channel.post(CLOSE_REQUEST);
 
       expect(peer.postMessage).toHaveBeenCalledTimes(1);
       expect(peer.postMessage.mock.calls[0]?.[1]).toBe(ORIGIN);
@@ -472,7 +621,7 @@ describe('Channel', () => {
     it('never posts with a wildcard target origin', () => {
       channel.start();
 
-      channel.post('close');
+      channel.post(CLOSE_REQUEST);
 
       expect(peer.postMessage.mock.calls[0]?.[1]).not.toBe('*');
     });
@@ -480,9 +629,12 @@ describe('Channel', () => {
     it('wraps the outbound message in the sdk envelope', () => {
       channel.start();
 
-      channel.post('close');
+      channel.post(CLOSE_REQUEST);
 
-      expect(peer.postMessage.mock.calls[0]?.[0]).toEqual({ source: 'zinid-sdk', type: 'close' });
+      expect(peer.postMessage.mock.calls[0]?.[0]).toEqual({
+        source: 'zinid-sdk',
+        type: 'zinid:close',
+      });
     });
 
     it('includes the payload when one is given', () => {
@@ -501,7 +653,7 @@ describe('Channel', () => {
       channel.start();
       channel.destroy();
 
-      channel.post('close');
+      channel.post(CLOSE_REQUEST);
 
       expect(peer.postMessage).not.toHaveBeenCalled();
     });
@@ -525,7 +677,7 @@ describe('Channel', () => {
       channel.start();
       otherChannel.start();
 
-      deliver(message('complete', COMPLETE_PAYLOAD));
+      deliver(message('zinid:complete', COMPLETE_PAYLOAD));
 
       expect(handler).toHaveBeenCalledTimes(1);
       expect(otherHandler).not.toHaveBeenCalled();

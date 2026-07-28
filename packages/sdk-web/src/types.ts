@@ -46,6 +46,15 @@ export type ErrorPayload = {
   message: string;
 };
 
+/**
+ * Height the hosted page wants its frame to be, already debounced and settled
+ * by the hosted side. Consumed internally to size the embedded iframe; it is
+ * not a vendor-facing event.
+ */
+export type ResizePayload = {
+  height: number;
+};
+
 /** The hosted page has loaded and the channel is live. Carries no payload. */
 export type ReadyPayload = void;
 

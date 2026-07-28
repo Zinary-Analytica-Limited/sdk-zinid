@@ -12,13 +12,25 @@
  */
 
 import type { Emitter } from './emitter';
-import type { CompletePayload, ErrorPayload, StepChangePayload, ZinIDEventMap } from './types';
+import type {
+  CompletePayload,
+  ErrorPayload,
+  ResizePayload,
+  StepChangePayload,
+  ZinIDEventMap,
+} from './types';
 
 /** Tag on messages sent by the hosted page. */
 const INBOUND_SOURCE = 'zinid';
 
 /** Tag on messages sent by this SDK. */
 const OUTBOUND_SOURCE = 'zinid-sdk';
+
+/**
+ * Message types are namespaced with a `zinid:` prefix on the wire. The prefix
+ * is canonical and owned by the hosted page — never match the bare names.
+ */
+export const CLOSE_REQUEST = 'zinid:close';
 
 /** Error code used when a message is provably ours but does not match the contract. */
 const INVALID_MESSAGE = 'invalid_message';
@@ -45,6 +57,11 @@ export interface ChannelOptions {
   peer: PeerWindow;
   /** Listener scope. Defaults to the global object, resolved at `start()`. */
   scope?: MessageScope;
+  /**
+   * Called when the hosted page reports a settled height. Left unset by modes
+   * that hold a fixed box, so an unwanted resize is ignored at the source.
+   */
+  onResize?: (payload: ResizePayload) => void;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -75,6 +92,10 @@ function isErrorPayload(value: unknown): value is ErrorPayload {
   return isRecord(value) && typeof value.code === 'string' && typeof value.message === 'string';
 }
 
+function isResizePayload(value: unknown): value is ResizePayload {
+  return isRecord(value) && typeof value.height === 'number' && Number.isFinite(value.height);
+}
+
 /**
  * Derive the origin to trust from a session URL.
  *
@@ -102,6 +123,7 @@ export class Channel {
   private readonly origin: string;
   private readonly peer: PeerWindow;
   private readonly configuredScope: MessageScope | undefined;
+  private readonly onResize: ((payload: ResizePayload) => void) | undefined;
 
   /** Set only while listening; also what gates outbound posts. */
   private scope: MessageScope | undefined;
@@ -121,6 +143,7 @@ export class Channel {
     this.origin = origin;
     this.peer = options.peer;
     this.configuredScope = options.scope;
+    this.onResize = options.onResize;
   }
 
   /** Begin listening. Calling it again while already listening is a no-op. */
@@ -163,25 +186,34 @@ export class Channel {
     const data: unknown = event.data;
     if (!isRecord(data) || data.source !== INBOUND_SOURCE || typeof data.type !== 'string') return;
 
+    // Message types are namespaced on the wire. Matching the bare names here
+    // silently drops every inbound message, which no unit test using the same
+    // wrong string on both sides can catch — hence the E2E contract spec.
     const payload: unknown = data.payload;
     switch (data.type) {
-      case 'ready':
+      case 'zinid:ready':
         this.emitter.emit('ready');
         return;
-      case 'cancel':
+      case 'zinid:cancel':
         this.emitter.emit('cancel');
         return;
-      case 'complete':
-        if (!isCompletePayload(payload)) return this.reject('complete');
+      case 'zinid:complete':
+        if (!isCompletePayload(payload)) return this.reject(data.type);
         this.emitter.emit('complete', payload);
         return;
-      case 'step_change':
-        if (!isStepChangePayload(payload)) return this.reject('step_change');
+      case 'zinid:step_change':
+        if (!isStepChangePayload(payload)) return this.reject(data.type);
         this.emitter.emit('step_change', payload);
         return;
-      case 'error':
-        if (!isErrorPayload(payload)) return this.reject('error');
+      case 'zinid:error':
+        if (!isErrorPayload(payload)) return this.reject(data.type);
         this.emitter.emit('error', payload);
+        return;
+      case 'zinid:resize':
+        // Not a vendor-facing event: it drives iframe layout, and only the
+        // mode that owns a resizable frame subscribes to it.
+        if (!isResizePayload(payload)) return this.reject(data.type);
+        this.onResize?.(payload);
         return;
       default:
         // A newer hosted page may send events this SDK version predates.

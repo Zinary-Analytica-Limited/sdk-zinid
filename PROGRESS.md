@@ -134,10 +134,75 @@ implementation.
 - **Backdrop-click-to-close — intentionally omitted, keep it that way.** A stray click must not
   destroy a half-finished verification.
 
-## Phase 4 — next
+## Phase 4 — Wire prefix fix and the embed resize contract (complete, 2026-07-28)
 
-End-to-end tests against the deployed hosted page (Playwright, Chromium only — config exists, no
-specs yet), plus reconciling the wire envelope with the hosted repo. The envelope
-(`{ source: 'zinid' }` inbound, `{ source: 'zinid-sdk' }` outbound, and the `close` request Escape
-sends) was defined here without sight of the hosted implementation; every guard works, but if the
-shapes disagree nothing gets through. Verify that before writing E2E specs.
+### ⚠️ The channel was fully non-functional before this phase
+
+The hosted page namespaces message types (`zinid:ready`, `zinid:complete`, …). The SDK's inbound
+switch matched the **bare** names, so every inbound message fell through to `default` and was
+silently discarded. The SDK received nothing from the hosted page — ever.
+
+**Any earlier claim in this file that the channel worked was wrong and must be re-verified end to
+end.** Phases 2 and 3 both reported green suites, and both were green against a contract the tests
+themselves defined: the unit tests used the same incorrect string on both sides, so they agreed
+with the implementation and disagreed with reality. A passing unit test is not evidence that the
+channel works. Treat the Phase 2 and Phase 3 "channel working" statements as unverified until
+covered by the E2E contract spec.
+
+The same defect existed on the outbound side: Escape posted type `close` rather than `zinid:close`,
+so the hosted page's close handler would never have matched and the Escape → cancel loop could not
+have completed. Both directions are fixed.
+
+### Fixes and additions
+
+- `channel.ts` now matches the canonical `zinid:*` types, and `CLOSE_REQUEST` (`zinid:close`) is
+  exported so the flow cannot re-introduce a bare outbound type.
+- **Regression tests spell the wire strings out as literals**, never via a helper shared with the
+  implementation — a helper is exactly what let the original bug hide. Unprefixed types are now
+  asserted to be _ignored_; an unknown `zinid:*` type is still ignored, preserving forward
+  compatibility with a newer hosted page.
+- **`zinid:resize` consumed in embed mode.** Guarded by `isResizePayload`, routed to the active
+  iframe, and delivered through a `Channel.onResize` consumer rather than the public emitter —
+  resize drives layout and is not a vendor-facing event.
+  - Height is clamped with `Math.max(height, SDK_MIN_HEIGHT)` (320) on the SDK side, mirroring the
+    hosted page's floor rather than trusting it, so a momentary small measurement cannot collapse
+    the frame.
+  - The embed iframe carries `transition: height 250ms ease`, so applying a height animates. This
+    is the SDK-owned single animation: the iframe animates, the hosted content just changes.
+  - Embed starts at `EMBED_INITIAL_HEIGHT` (480) so it never renders at zero and flashes empty; the
+    first `zinid:resize` corrects it smoothly.
+  - **Modal ignores resize entirely** and holds a fixed `MODAL_HEIGHT` (520) box with internal
+    scroll, matching the hosted page's modal policy. It never subscribes, so an unwanted resize is
+    ignored at the source. **Redirect** has no iframe and no channel.
+- Escape → close → cancel confirmed working now that the prefix is right, both in unit tests and
+  end to end.
+
+### E2E contract spec — the thing that can actually catch this
+
+`e2e/channel-contract.spec.ts` runs the **built IIFE bundle** in a real Chromium page against a
+hosted-page double, with the two on genuinely different origins (`vendor.test` /
+`verify.zinid.test`, served by Playwright route interception, no server needed). The double spells
+the `zinid:*` types out by hand. It covers ready, complete-verbatim, step_change, resize apply and
+clamp, the full Escape → `zinid:close` → `zinid:cancel` round trip, and a foreign-origin message
+being ignored.
+
+**Verified it catches the original bug:** reverting the switch to the bare names fails 6 of the 8
+E2E tests. Run with `pnpm --filter @zinid/sdk-web test:e2e` (builds first). Not yet wired into CI —
+that needs a `playwright install chromium` step.
+
+- Unit tests: 216 passing. E2E: 8 passing. Size budget: **2.48 kB gzipped of 8 KB**.
+
+### Still deferred
+
+- **`sandbox` on the iframe — hardening TODO.** Now that an E2E double exists, this can be trialled
+  against it, though only the real hosted page settles the token set.
+- **Focus trap in the modal — required before GA (accessibility).**
+- **Backdrop-click-to-close — intentionally omitted, keep it that way.**
+
+## Phase 5 — next
+
+Reconcile the rest of the envelope against the real hosted repo, not just the double: the double
+encodes _my_ understanding of the contract, so it can only catch drift between SDK and double, not
+a shared misunderstanding of the hosted page. Confirm the `source` tag values (`zinid` inbound,
+`zinid-sdk` outbound), the `complete` payload shape, and whether any further `zinid:*` types exist.
+Then wire E2E into CI with a browser-install step.

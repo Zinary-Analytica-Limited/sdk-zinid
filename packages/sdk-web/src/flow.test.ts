@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CLOSE_CONFIRM_TIMEOUT_MS, createFlow } from './flow';
+import {
+  CLOSE_CONFIRM_TIMEOUT_MS,
+  EMBED_INITIAL_HEIGHT,
+  MODAL_HEIGHT,
+  SDK_MIN_HEIGHT,
+  createFlow,
+} from './flow';
 import type { ZinIDFlow } from './flow';
 
 const URL_ = 'https://verify.zinid.com/s/abc123';
@@ -94,7 +100,7 @@ describe('createFlow', () => {
 
       const firstIframe = findIframe(firstHost);
       expect(firstIframe).not.toBeNull();
-      deliverFrom(firstIframe as HTMLIFrameElement, 'complete', COMPLETE_PAYLOAD);
+      deliverFrom(firstIframe as HTMLIFrameElement, 'zinid:complete', COMPLETE_PAYLOAD);
 
       expect(firstHandler).toHaveBeenCalledTimes(1);
       expect(secondHandler).not.toHaveBeenCalled();
@@ -116,7 +122,7 @@ describe('createFlow', () => {
       document.body.append(host);
       flow.mount(host);
 
-      deliverFrom(findIframe(host) as HTMLIFrameElement, 'complete', COMPLETE_PAYLOAD);
+      deliverFrom(findIframe(host) as HTMLIFrameElement, 'zinid:complete', COMPLETE_PAYLOAD);
 
       expect(onComplete).toHaveBeenCalledWith(COMPLETE_PAYLOAD);
     });
@@ -131,7 +137,7 @@ describe('createFlow', () => {
       document.body.append(host);
       flow.mount(host);
 
-      deliverFrom(findIframe(host) as HTMLIFrameElement, 'complete', COMPLETE_PAYLOAD);
+      deliverFrom(findIframe(host) as HTMLIFrameElement, 'zinid:complete', COMPLETE_PAYLOAD);
 
       expect(sugar).toHaveBeenCalledTimes(1);
       expect(subscribed).toHaveBeenCalledTimes(1);
@@ -146,7 +152,7 @@ describe('createFlow', () => {
       document.body.append(host);
       flow.mount(host);
 
-      deliverFrom(findIframe(host) as HTMLIFrameElement, 'complete', COMPLETE_PAYLOAD);
+      deliverFrom(findIframe(host) as HTMLIFrameElement, 'zinid:complete', COMPLETE_PAYLOAD);
 
       expect(handler).not.toHaveBeenCalled();
     });
@@ -162,10 +168,10 @@ describe('createFlow', () => {
       flow.mount(host);
       const iframe = findIframe(host) as HTMLIFrameElement;
 
-      deliverFrom(iframe, 'ready');
-      deliverFrom(iframe, 'step_change', { step: 'document', index: 1, total: 3 });
-      deliverFrom(iframe, 'cancel');
-      deliverFrom(iframe, 'error', { code: 'camera_denied', message: 'No camera' });
+      deliverFrom(iframe, 'zinid:ready');
+      deliverFrom(iframe, 'zinid:step_change', { step: 'document', index: 1, total: 3 });
+      deliverFrom(iframe, 'zinid:cancel');
+      deliverFrom(iframe, 'zinid:error', { code: 'camera_denied', message: 'No camera' });
 
       expect(onReady).toHaveBeenCalledTimes(1);
       expect(onStepChange).toHaveBeenCalledWith({ step: 'document', index: 1, total: 3 });
@@ -184,7 +190,7 @@ describe('createFlow', () => {
         new MessageEvent('message', {
           origin: 'https://evil.example',
           source: (findIframe(host) as HTMLIFrameElement).contentWindow,
-          data: { source: 'zinid', type: 'complete', payload: COMPLETE_PAYLOAD },
+          data: { source: 'zinid', type: 'zinid:complete', payload: COMPLETE_PAYLOAD },
         }),
       );
 
@@ -287,6 +293,98 @@ describe('createFlow', () => {
     });
   });
 
+  describe('embed resize contract', () => {
+    function mountEmbed() {
+      const host = document.createElement('div');
+      document.body.append(host);
+      const flow = make({ url: URL_ });
+      flow.mount(host);
+      return { flow, host, iframe: findIframe(host) as HTMLIFrameElement };
+    }
+
+    it('starts at a sensible height so the frame never renders empty', () => {
+      const { iframe } = mountEmbed();
+
+      expect(iframe.style.height).toBe(`${EMBED_INITIAL_HEIGHT}px`);
+    });
+
+    it('carries a height transition so a new height animates rather than snaps', () => {
+      const { iframe } = mountEmbed();
+
+      expect(iframe.style.transition).toMatch(/height/);
+      expect(iframe.style.transition).toMatch(/250ms/);
+    });
+
+    it('grows the frame to a settled height', () => {
+      const { iframe } = mountEmbed();
+
+      deliverFrom(iframe, 'zinid:resize', { height: 900 });
+
+      expect(iframe.style.height).toBe('900px');
+    });
+
+    it('shrinks the frame to a smaller settled height', () => {
+      const { iframe } = mountEmbed();
+      deliverFrom(iframe, 'zinid:resize', { height: 900 });
+
+      deliverFrom(iframe, 'zinid:resize', { height: 600 });
+
+      expect(iframe.style.height).toBe('600px');
+    });
+
+    it('clamps a collapsing measurement to the floor', () => {
+      // Mirrors the hosted side's floor rather than trusting it: a momentary
+      // small measurement must not collapse the frame.
+      const { iframe } = mountEmbed();
+
+      deliverFrom(iframe, 'zinid:resize', { height: 12 });
+
+      expect(iframe.style.height).toBe(`${SDK_MIN_HEIGHT}px`);
+    });
+
+    it('clamps a zero height to the floor', () => {
+      const { iframe } = mountEmbed();
+
+      deliverFrom(iframe, 'zinid:resize', { height: 0 });
+
+      expect(iframe.style.height).toBe(`${SDK_MIN_HEIGHT}px`);
+    });
+
+    it('ignores a malformed height and leaves the frame as it was', () => {
+      const { iframe } = mountEmbed();
+
+      deliverFrom(iframe, 'zinid:resize', { height: 'tall' });
+
+      expect(iframe.style.height).toBe(`${EMBED_INITIAL_HEIGHT}px`);
+    });
+
+    it('stops applying heights once closed', () => {
+      const { flow, iframe } = mountEmbed();
+
+      flow.close();
+      deliverFrom(iframe, 'zinid:resize', { height: 900 });
+
+      expect(iframe.style.height).toBe(`${EMBED_INITIAL_HEIGHT}px`);
+    });
+  });
+
+  describe('modal ignores resize', () => {
+    it('holds a fixed box height', () => {
+      make({ url: URL_, mode: 'modal' }).mount();
+
+      expect((findIframe() as HTMLIFrameElement).style.height).toBe(`${MODAL_HEIGHT}px`);
+    });
+
+    it('does not resize per message', () => {
+      make({ url: URL_, mode: 'modal' }).mount();
+      const iframe = findIframe() as HTMLIFrameElement;
+
+      deliverFrom(iframe, 'zinid:resize', { height: 900 });
+
+      expect(iframe.style.height).toBe(`${MODAL_HEIGHT}px`);
+    });
+  });
+
   describe('modal mode', () => {
     it('appends an overlay to the body containing the iframe', () => {
       make({ url: URL_, mode: 'modal' }).mount();
@@ -356,7 +454,7 @@ describe('createFlow', () => {
 
       pressEscape();
 
-      expect(post).toHaveBeenCalledWith({ source: 'zinid-sdk', type: 'close' }, ORIGIN);
+      expect(post).toHaveBeenCalledWith({ source: 'zinid-sdk', type: 'zinid:close' }, ORIGIN);
     });
 
     it('does not emit cancel itself', () => {
@@ -381,7 +479,7 @@ describe('createFlow', () => {
       const { iframe } = mountModal({ onCancel });
 
       pressEscape();
-      deliverFrom(iframe, 'cancel');
+      deliverFrom(iframe, 'zinid:cancel');
 
       expect(onCancel).toHaveBeenCalledTimes(1);
       expect(findIframe()).toBeNull();
@@ -392,7 +490,7 @@ describe('createFlow', () => {
       // The user clicked the hosted page's own close control; no Escape involved.
       const { iframe } = mountModal();
 
-      deliverFrom(iframe, 'cancel');
+      deliverFrom(iframe, 'zinid:cancel');
 
       expect(findIframe()).toBeNull();
     });
@@ -426,7 +524,7 @@ describe('createFlow', () => {
       const { iframe } = mountModal({ onError });
 
       pressEscape();
-      deliverFrom(iframe, 'cancel');
+      deliverFrom(iframe, 'zinid:cancel');
       vi.advanceTimersByTime(CLOSE_CONFIRM_TIMEOUT_MS * 2);
 
       expect(onError).not.toHaveBeenCalled();
@@ -447,7 +545,7 @@ describe('createFlow', () => {
 
     it('stops listening for Escape once torn down', () => {
       const { iframe, post } = mountModal();
-      deliverFrom(iframe, 'cancel');
+      deliverFrom(iframe, 'zinid:cancel');
       post.mockClear();
 
       pressEscape();
@@ -457,7 +555,7 @@ describe('createFlow', () => {
 
     it('can be reopened after cancelling', () => {
       const { flow, iframe } = mountModal();
-      deliverFrom(iframe, 'cancel');
+      deliverFrom(iframe, 'zinid:cancel');
       expect(findIframe()).toBeNull();
 
       flow.mount();
@@ -472,7 +570,7 @@ describe('createFlow', () => {
       const flow = make({ url: URL_, mode: 'modal', onComplete });
       flow.mount();
 
-      deliverFrom(findIframe() as HTMLIFrameElement, 'complete', COMPLETE_PAYLOAD);
+      deliverFrom(findIframe() as HTMLIFrameElement, 'zinid:complete', COMPLETE_PAYLOAD);
 
       expect(onComplete).toHaveBeenCalledWith(COMPLETE_PAYLOAD);
       expect(findIframe()).not.toBeNull();
@@ -484,7 +582,7 @@ describe('createFlow', () => {
       const flow = make({ url: URL_ });
       flow.mount(host);
 
-      deliverFrom(findIframe(host) as HTMLIFrameElement, 'complete', COMPLETE_PAYLOAD);
+      deliverFrom(findIframe(host) as HTMLIFrameElement, 'zinid:complete', COMPLETE_PAYLOAD);
 
       expect(findIframe(host)).not.toBeNull();
     });
@@ -492,7 +590,7 @@ describe('createFlow', () => {
     it('is dismissed by the vendor calling close()', () => {
       const flow = make({ url: URL_, mode: 'modal' });
       flow.mount();
-      deliverFrom(findIframe() as HTMLIFrameElement, 'complete', COMPLETE_PAYLOAD);
+      deliverFrom(findIframe() as HTMLIFrameElement, 'zinid:complete', COMPLETE_PAYLOAD);
 
       flow.close();
 
@@ -532,7 +630,7 @@ describe('createFlow', () => {
       const iframe = findIframe(host) as HTMLIFrameElement;
 
       flow.close();
-      deliverFrom(iframe, 'complete', COMPLETE_PAYLOAD);
+      deliverFrom(iframe, 'zinid:complete', COMPLETE_PAYLOAD);
 
       expect(onComplete).not.toHaveBeenCalled();
     });
@@ -547,7 +645,7 @@ describe('createFlow', () => {
       flow.close();
 
       flow.mount(host);
-      deliverFrom(findIframe(host) as HTMLIFrameElement, 'complete', COMPLETE_PAYLOAD);
+      deliverFrom(findIframe(host) as HTMLIFrameElement, 'zinid:complete', COMPLETE_PAYLOAD);
 
       expect(handler).toHaveBeenCalledTimes(1);
     });
@@ -595,7 +693,7 @@ describe('createFlow', () => {
         new MessageEvent('message', {
           origin: ORIGIN,
           source: window,
-          data: { source: 'zinid', type: 'complete', payload: COMPLETE_PAYLOAD },
+          data: { source: 'zinid', type: 'zinid:complete', payload: COMPLETE_PAYLOAD },
         }),
       );
 
@@ -633,7 +731,7 @@ describe('createFlow', () => {
       const iframe = findIframe(host) as HTMLIFrameElement;
 
       flow.destroy();
-      deliverFrom(iframe, 'complete', COMPLETE_PAYLOAD);
+      deliverFrom(iframe, 'zinid:complete', COMPLETE_PAYLOAD);
 
       expect(onComplete).not.toHaveBeenCalled();
     });
@@ -648,7 +746,7 @@ describe('createFlow', () => {
       const iframe = findIframe(host) as HTMLIFrameElement;
 
       flow.destroy();
-      deliverFrom(iframe, 'complete', COMPLETE_PAYLOAD);
+      deliverFrom(iframe, 'zinid:complete', COMPLETE_PAYLOAD);
 
       expect(handler).not.toHaveBeenCalled();
     });
