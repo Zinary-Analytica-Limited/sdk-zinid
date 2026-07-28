@@ -59,7 +59,7 @@ A future `packages/react` and shared `examples/` fit alongside without restructu
 - **TDD for vital logic** — emitter, postMessage channel, URL/param construction: write the test
   file first, then **stop for review of the test file** before implementing.
 - **Conventional commits** (`feat:`, `fix:`, `chore:`, ...). No AI attribution in commit messages.
-- **Commit and push after every phase.**
+- **Commit after every phase. Never push** — pushing is always the user's own action.
 - **PROGRESS.md**: read it at the start of every session; update it at the end of every session.
 
 ## Commands
