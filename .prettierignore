@@ -4,3 +4,6 @@ coverage/
 playwright-report/
 test-results/
 pnpm-lock.yaml
+
+# Machine-managed by Claude Code; rewritten whenever permissions change.
+.claude/settings.json

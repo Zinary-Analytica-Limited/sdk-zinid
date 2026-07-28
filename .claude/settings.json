@@ -10,7 +10,23 @@
       "Bash(node -e \"const p=require\\('./packages/sdk-web/package.json'\\); console.log\\('dependencies:', JSON.stringify\\(p.dependencies\\), '| main:',p.main,'| module:',p.module,'| types:',p.types,'| unpkg:',p.unpkg,'| jsdelivr:',p.jsdelivr\\)\")",
       "Bash(pnpm exec *)",
       "Bash(echo \"LINT=$?\")",
-      "Bash(echo \"TYPECHECK=$?\")"
+      "Bash(echo \"TYPECHECK=$?\")",
+      "Bash(git commit *)",
+      "Bash(cat /private/tmp/claude-501/-Users-guess-Desktop-Work-Zinary-sdk-zinid/1d9fbf36-a7e9-442e-802d-a6bcb00418c5/tasks/bq2rzr1oa.output; echo \"--- installed browsers:\"; ls ~/Library/Caches/ms-playwright/ 2>/dev/null)",
+      "Read(//Users/guess/Library/Caches/ms-playwright/**)",
+      "Bash(cp src/types.ts /tmp/t.bak)",
+      "Bash(cp src/emitter.ts /tmp/e.bak)",
+      "Bash(perl -pi -e \"s/'Approved' \\\\| 'Declined' \\\\| 'Pending';/'Approved' | 'Declined' | 'Pending' | 'In Review';/\" src/types.ts)",
+      "Bash(cp /tmp/t.bak src/types.ts)",
+      "Bash(perl -pi -e \"s/for \\\\\\(const handler of \\\\[\\\\.\\\\.\\\\.registered\\\\]\\\\\\) \\\\{/for \\(const handler of registered\\) {/\" src/emitter.ts)",
+      "Bash(cp /tmp/e.bak src/emitter.ts)",
+      "Bash(perl -0pi -e \"s/setTimeout\\\\\\(\\\\\\(\\\\\\) => \\\\{\\\\n          throw error;\\\\n        \\\\}\\\\\\);/void error;/\" src/emitter.ts)",
+      "Bash(echo \"TEST=$?\")",
+      "Bash(cp src/index.ts /tmp/i.bak)",
+      "Bash(pnpm run *)"
+    ],
+    "additionalDirectories": [
+      "/tmp"
     ]
   }
 }
