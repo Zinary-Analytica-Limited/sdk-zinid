@@ -1,0 +1,207 @@
+/**
+ * Flow factory — the vendor-facing entry point.
+ *
+ * `createFlow` returns a fresh instance every call; there is no singleton, so
+ * several flows can run on one page without interfering. Nothing here touches
+ * the DOM until `mount()` is called, so importing this module during a server
+ * render is safe.
+ */
+
+import { Channel, originFromUrl } from './channel';
+import { Emitter } from './emitter';
+import type {
+  ZinIDEventHandler,
+  ZinIDEventMap,
+  ZinIDEventName,
+  ZinIDFlowMode,
+  ZinIDFlowOptions,
+} from './types';
+
+/**
+ * How long to wait for the hosted page to confirm a close request before
+ * tearing the UI down anyway, so a user can never be trapped in a modal that
+ * an unresponsive flow refuses to close.
+ */
+export const CLOSE_CONFIRM_TIMEOUT_MS = 2000;
+
+const MODES: ZinIDFlowMode[] = ['embed', 'modal', 'redirect'];
+
+const IFRAME_ALLOW = 'camera; microphone';
+
+const IFRAME_TITLE = 'Identity verification';
+
+export interface ZinIDFlow {
+  /** Subscribe to an event. Identical in effect to the matching `onX` option. */
+  on<K extends ZinIDEventName>(event: K, handler: ZinIDEventHandler<K>): void;
+  /** Unsubscribe a handler previously passed to `on`. */
+  off<K extends ZinIDEventName>(event: K, handler: ZinIDEventHandler<K>): void;
+  /**
+   * Present the flow. In embed mode the target is an element or a CSS selector,
+   * falling back to `options.container`; modal ignores it; redirect navigates.
+   */
+  mount(target?: HTMLElement | string): void;
+  /** Dismiss the UI but keep the instance and its handlers, so it can be remounted. */
+  close(): void;
+  /** Dismiss the UI and drop every handler. The instance is spent. */
+  destroy(): void;
+}
+
+function resolveContainer(target: HTMLElement | string): HTMLElement {
+  if (typeof target !== 'string') return target;
+  const found = document.querySelector(target);
+  if (!found) throw new Error(`No element matches the selector ${JSON.stringify(target)}`);
+  return found as HTMLElement;
+}
+
+function createIframe(url: string, fill: boolean): HTMLIFrameElement {
+  const iframe = document.createElement('iframe');
+  // The session URL is loaded exactly as the backend issued it. The SDK never
+  // builds or rewrites a flow URL.
+  iframe.setAttribute('src', url);
+  iframe.setAttribute('title', IFRAME_TITLE);
+  iframe.setAttribute('allow', IFRAME_ALLOW);
+  // TODO(hardening): add a `sandbox` attribute once the hosted page's exact
+  // requirements are known — the wrong token set silently breaks camera access.
+  iframe.style.cssText = fill
+    ? 'width:100%;height:100%;border:0;'
+    : 'width:100%;height:100%;min-height:100%;border:0;';
+  return iframe;
+}
+
+function createOverlay(): HTMLElement {
+  const overlay = document.createElement('div');
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-label', IFRAME_TITLE);
+  overlay.style.cssText =
+    'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,0.6);' +
+    'display:flex;align-items:center;justify-content:center;';
+  // TODO(a11y, required before GA): trap focus inside the overlay while open.
+  // Backdrop-click-to-close is deliberately omitted: a stray click must not
+  // destroy a half-finished verification.
+  return overlay;
+}
+
+export function createFlow(options: ZinIDFlowOptions): ZinIDFlow {
+  if (!options || typeof options.url !== 'string' || options.url === '') {
+    throw new TypeError('createFlow requires a session url issued by your backend.');
+  }
+  // Parses the URL the vendor supplied; never constructs one.
+  const origin = originFromUrl(options.url);
+  const mode: ZinIDFlowMode = options.mode ?? 'embed';
+  if (!MODES.includes(mode)) {
+    throw new TypeError(`Unknown mode ${JSON.stringify(mode)}; expected ${MODES.join(', ')}.`);
+  }
+
+  // One emitter per instance. Options-object handlers and `.on()` are both just
+  // subscriptions on it, so neither can shadow the other.
+  const emitter = new Emitter<ZinIDEventMap>();
+  if (options.onReady) emitter.on('ready', options.onReady);
+  if (options.onStepChange) emitter.on('step_change', options.onStepChange);
+  if (options.onComplete) emitter.on('complete', options.onComplete);
+  if (options.onCancel) emitter.on('cancel', options.onCancel);
+  if (options.onError) emitter.on('error', options.onError);
+
+  let channel: Channel | undefined;
+  let iframe: HTMLIFrameElement | undefined;
+  let overlay: HTMLElement | undefined;
+  let previousOverflow: string | undefined;
+  let closeTimer: ReturnType<typeof setTimeout> | undefined;
+  let keydownListener: ((event: KeyboardEvent) => void) | undefined;
+
+  function teardownUi(): void {
+    if (closeTimer !== undefined) {
+      clearTimeout(closeTimer);
+      closeTimer = undefined;
+    }
+    if (keydownListener) {
+      document.removeEventListener('keydown', keydownListener);
+      keydownListener = undefined;
+    }
+    channel?.destroy();
+    channel = undefined;
+    overlay?.remove();
+    overlay = undefined;
+    iframe?.remove();
+    iframe = undefined;
+    if (previousOverflow !== undefined) {
+      document.body.style.overflow = previousOverflow;
+      previousOverflow = undefined;
+    }
+  }
+
+  /**
+   * Ask the hosted page to close. The SDK does not synthesise `cancel` — the
+   * flow owns that event, and teardown waits for it. The timer is only a
+   * safety valve for a page that never answers.
+   */
+  function requestClose(): void {
+    if (!channel || closeTimer !== undefined) return;
+    channel.post('close');
+    closeTimer = setTimeout(() => {
+      closeTimer = undefined;
+      emitter.emit('error', {
+        code: 'close_timeout',
+        message: 'The verification flow did not confirm the close request; it was dismissed.',
+      });
+      teardownUi();
+    }, CLOSE_CONFIRM_TIMEOUT_MS);
+  }
+
+  // Registered once, up front: the hosted page's cancel is what actually closes
+  // a modal. Completion deliberately leaves the UI alone so the vendor can show
+  // their own success state and dismiss it with close().
+  emitter.on('cancel', () => {
+    if (mode === 'modal') teardownUi();
+  });
+
+  function mount(target?: HTMLElement | string): void {
+    if (mode === 'redirect') {
+      globalThis.location.assign(options.url);
+      return;
+    }
+    if (iframe) return;
+
+    if (mode === 'modal') {
+      overlay = createOverlay();
+      iframe = createIframe(options.url, true);
+      overlay.append(iframe);
+      previousOverflow = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+      document.body.append(overlay);
+      keydownListener = (event: KeyboardEvent) => {
+        if (event.key === 'Escape') requestClose();
+      };
+      document.addEventListener('keydown', keydownListener);
+    } else {
+      const requested = target ?? options.container;
+      if (requested === undefined) {
+        throw new TypeError(
+          'mount() needs a container: pass an element or selector, or set options.container.',
+        );
+      }
+      const container = resolveContainer(requested);
+      iframe = createIframe(options.url, false);
+      container.append(iframe);
+    }
+
+    const peer = iframe.contentWindow;
+    if (!peer) {
+      teardownUi();
+      throw new Error('The verification iframe has no content window.');
+    }
+    channel = new Channel({ emitter, origin, peer, scope: window });
+    channel.start();
+  }
+
+  return {
+    on: (event, handler) => emitter.on(event, handler),
+    off: (event, handler) => emitter.off(event, handler),
+    mount,
+    close: teardownUi,
+    destroy: () => {
+      teardownUi();
+      emitter.clear();
+    },
+  };
+}

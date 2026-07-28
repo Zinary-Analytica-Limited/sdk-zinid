@@ -87,10 +87,57 @@ Still not wired into `index.ts` — no factory, no modes. The size budget theref
 placeholder (366 B of 8 KB); exporting the channel, emitter, and types measures 1.32 kB, so the
 budget still has ample headroom.
 
-## Phase 3 — next
+## Phase 3 — Flow factory and the three modes (complete, 2026-07-28)
 
-The flow factory and the three modes (embed, modal, redirect): instance-based entry point that
-creates and manages the iframe, wires `ZinIDFlowOptions` sugar handlers onto the same emitter as
-`.on()`, resolves `mount` targets of `HTMLElement | string`, and owns teardown via the channel's
-`destroy()` and the emitter's `clear()`. Per CLAUDE.md, URL/param handling is vital logic — TDD
-with a stop-and-review checkpoint on the test file.
+Built test-first, with the test file and the interaction decisions reviewed and approved before
+implementation.
+
+- `src/flow.ts` — `createFlow(options)` returns a fresh `ZinIDFlow` every call; no singleton, so
+  several flows coexist on one page. Nothing touches the DOM until `mount()`, so a top-level import
+  is safe during a server render.
+- Public instance API: `on`, `off`, `mount(target?)`, `close()`, `destroy()`.
+  - `close()` dismisses the UI but keeps the instance and its handlers, so it can be remounted.
+  - `destroy()` dismisses the UI **and** clears every handler. The instance is spent.
+- Options are validated eagerly in `createFlow` (missing url, non-http scheme, unparseable url,
+  unknown mode) rather than deferred to `mount`, so mistakes surface at the call that made them.
+- Sugar handlers and `.on()` both subscribe to the one emitter; a test asserts neither shadows the
+  other. `mount()`'s argument takes precedence over `options.container`.
+- **Embed**: appends an iframe to the target element or CSS selector, leaving existing children
+  intact so a vendor's loading placeholder survives. **Modal**: `role="dialog" aria-modal="true"`
+  overlay on `body`, with body scroll locked and restored on teardown. **Redirect**:
+  `location.assign(url)`, no iframe and no channel.
+- The iframe loads the session URL verbatim, with `allow="camera; microphone"` and a title.
+- **Escape does not synthesise `cancel`.** It posts `{ source: 'zinid-sdk', type: 'close' }` to the
+  hosted page and waits; the flow's own `cancel` is what tears the modal down. A
+  `CLOSE_CONFIRM_TIMEOUT_MS` (2s) fallback dismisses the UI and emits an `error` with code
+  `close_timeout` if the page never answers, so a user cannot be trapped in a modal. Repeated
+  Escape presses do not stack timers.
+- **Completion leaves the UI in place** in both embed and modal, so the vendor can show their own
+  success state and dismiss it with `close()`. Only `cancel` auto-closes, and only for modal.
+- `src/index.ts` now exports the public surface: `createFlow` plus types, nothing else at runtime.
+- Tests: 185 passing. The behaviours are mutation-verified — synthesising `cancel` on Escape,
+  dropping the auto-close on `cancel`, also auto-closing on `complete`, clearing handlers in
+  `close()`, stacking fallback timers, rewriting the session URL, and preferring `options.container`
+  over the `mount()` argument each fail the suite.
+- All four build outputs verified against the real API: CJS and ESM both export `createFlow`, the
+  IIFE still declares the `ZinID` global, and `zinid.d.ts` carries the factory signature. The size
+  budget now measures the whole SDK: **2.32 kB gzipped of 8 KB**.
+
+### Deferred, tracked here so they are not lost
+
+- **`sandbox` on the iframe — hardening TODO.** Deliberately not added: the correct token set
+  depends on the hosted page's needs, and a wrong one silently breaks camera access. Decide against
+  the real hosted page, then add it with a test.
+- **Focus trap in the modal — required before GA (accessibility).** The overlay is marked up as a
+  dialog but does not yet trap focus, so keyboard and screen-reader users can tab out of it into
+  the page behind.
+- **Backdrop-click-to-close — intentionally omitted, keep it that way.** A stray click must not
+  destroy a half-finished verification.
+
+## Phase 4 — next
+
+End-to-end tests against the deployed hosted page (Playwright, Chromium only — config exists, no
+specs yet), plus reconciling the wire envelope with the hosted repo. The envelope
+(`{ source: 'zinid' }` inbound, `{ source: 'zinid-sdk' }` outbound, and the `close` request Escape
+sends) was defined here without sight of the hosted implementation; every guard works, but if the
+shapes disagree nothing gets through. Verify that before writing E2E specs.
