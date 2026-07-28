@@ -51,8 +51,46 @@ Not wired into `index.ts` — no factory, no channel, no modes, per the phase bo
 budget therefore still measures only the placeholder (366 B gzipped of 8 KB); exporting the
 emitter and types measures 533 B, so the budget has ample headroom.
 
-## Phase 2 — next
+## Phase 2 — postMessage channel with origin guards (complete, 2026-07-28)
 
-The postMessage channel with origin guards: the parent-side half of the channel with the hosted
-page, validating `event.origin` on every message before anything reaches the emitter. Per
-CLAUDE.md this is vital logic — TDD, and stop for review of the test file before implementing.
+Built test-first, with the test file and the wire contract reviewed and approved before
+implementation.
+
+- `src/channel.ts` — parent-side half of the channel with the hosted page. No DOM or window access
+  at module load or construction; the listener scope and peer window are injected and the scope is
+  resolved only inside `start()`, so a server render is safe.
+- **Wire envelope** (agreed in review; must stay in step with the hosted page):
+  - inbound `{ source: 'zinid', type, payload? }`
+  - outbound `{ source: 'zinid-sdk', type, payload? }`
+- **Three guards, in order.** Origin must match by exact whole-string comparison; sender must be
+  the peer window by identity, so another frame on the same origin cannot drive the flow; envelope
+  must carry our tag, since the window receives plenty of unrelated postMessage traffic.
+  `Channel` refuses to construct with `'*'`, `''`, or `'null'` as the origin, and `post()` always
+  addresses the exact trusted origin, never `'*'`.
+- **Malformed-message policy.** Not provably ours (bad tag, wrong shape, non-object) is dropped
+  silently. Ours but with a broken payload emits `error` with code `invalid_message` and does not
+  emit the original event, so a contract mismatch is loud rather than a silent stall. A well-formed
+  message with an _unknown_ type is ignored silently, so a newer hosted page can add events without
+  breaking older SDK versions. Consequence to keep in mind: a `complete` carrying `'In Review'`
+  fails validation and surfaces as an `error`, by design.
+- `originFromUrl(url)` derives the origin to trust from the session URL — parsing only, never
+  constructing — and rejects any scheme other than http/https so a `javascript:` or `data:` URL
+  cannot become a trusted origin.
+- Lifecycle: `start()` is idempotent, `destroy()` is safe before start and safe twice, the channel
+  is restartable, and `post()` is gated on being started.
+- Tests: 123 passing across `channel.test.ts`, `emitter.test.ts`, `types.test-d.ts`. The guards are
+  mutation-verified — removing the origin check, removing the source check, loosening origin
+  comparison to a prefix match, posting to `'*'`, skipping the status union, allowing any URL
+  scheme, and skipping the envelope tag each fail the suite.
+
+Still not wired into `index.ts` — no factory, no modes. The size budget therefore measures only the
+placeholder (366 B of 8 KB); exporting the channel, emitter, and types measures 1.32 kB, so the
+budget still has ample headroom.
+
+## Phase 3 — next
+
+The flow factory and the three modes (embed, modal, redirect): instance-based entry point that
+creates and manages the iframe, wires `ZinIDFlowOptions` sugar handlers onto the same emitter as
+`.on()`, resolves `mount` targets of `HTMLElement | string`, and owns teardown via the channel's
+`destroy()` and the emitter's `clear()`. Per CLAUDE.md, URL/param handling is vital logic — TDD
+with a stop-and-review checkpoint on the test file.
