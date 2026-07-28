@@ -43,7 +43,7 @@ export const EMBED_INITIAL_HEIGHT = 480;
  * this mirrors it rather than trusting it, so a momentary small measurement
  * cannot collapse the frame.
  */
-export const SDK_MIN_HEIGHT = 320;
+export const SDK_MIN_HEIGHT = 340;
 
 /** Modal holds a stable box and never resizes per message. */
 export const MODAL_HEIGHT = 520;

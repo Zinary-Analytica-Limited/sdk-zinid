@@ -164,9 +164,10 @@ have completed. Both directions are fixed.
 - **`zinid:resize` consumed in embed mode.** Guarded by `isResizePayload`, routed to the active
   iframe, and delivered through a `Channel.onResize` consumer rather than the public emitter —
   resize drives layout and is not a vendor-facing event.
-  - Height is clamped with `Math.max(height, SDK_MIN_HEIGHT)` (320) on the SDK side, mirroring the
-    hosted page's floor rather than trusting it, so a momentary small measurement cannot collapse
-    the frame.
+  - Height is clamped with `Math.max(height, SDK_MIN_HEIGHT)` (340, confirmed against the hosted
+    page's own floor) on the SDK side, mirroring that floor rather than trusting it, so a momentary
+    small measurement cannot collapse the frame. The E2E clamp test asserts the number directly
+    rather than importing the constant, so changing one without the other fails.
   - The embed iframe carries `transition: height 250ms ease`, so applying a height animates. This
     is the SDK-owned single animation: the iframe animates, the hosted content just changes.
   - Embed starts at `EMBED_INITIAL_HEIGHT` (480) so it never renders at zero and flashes empty; the

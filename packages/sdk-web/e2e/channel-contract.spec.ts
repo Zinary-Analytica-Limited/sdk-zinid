@@ -175,7 +175,7 @@ test.describe('SDK ↔ hosted page wire contract', () => {
           .locator('#host iframe')
           .evaluate((el) => Math.round(el.getBoundingClientRect().height)),
       )
-      .toBe(320);
+      .toBe(340);
   });
 
   test('escape sends the close request under its namespaced type', async ({ page }) => {
