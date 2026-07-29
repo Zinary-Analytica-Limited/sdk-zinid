@@ -296,6 +296,24 @@ frame-ancestors from a synthetic vendor origin.
 **The channel is now confirmed working end to end against production code**, which no previous
 phase could claim.
 
+## Local consumption from another repo (2026-07-29)
+
+- `packages/sdk-web` gained `dev` (`tsup --watch`) for iterating against a linked app, and
+  `prepack` so `pnpm pack` always ships a freshly built `dist/`. Tarball contents verified: `dist/`
+  and `package.json`, nothing else.
+- `docs/INTEGRATION.md` covers the three linking options (tarball, `pnpm link --global`, `file:`
+  path), a React `ZinIDEmbed` component and `useZinIDFlow` hook, the CDN script tag, and the
+  failure modes — opaque origins, secure-context camera, declined-is-not-an-error, server-side
+  confirmation.
+- The React snippet's logic was type-checked against the real API under `--strict
+--exactOptionalPropertyTypes`, so it is known to compile rather than merely reviewed.
+- `.env` and `*.tgz` are gitignored; `.env` holds a live session token.
+
+**Not verified:** that the staging page allows embedding from a `localhost` dev origin. The live
+E2E run used a synthetic `https://vendor.test` parent via route interception, which the page
+accepted, but a real `http://localhost:<port>` origin has not been tried. If the handshake is
+silent when integrating, check that first.
+
 ## Phase 6 — next
 
 1. **Wire E2E into CI** with a `playwright install chromium` step. The contract spec needs no
