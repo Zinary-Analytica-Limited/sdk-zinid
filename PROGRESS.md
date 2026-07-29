@@ -200,10 +200,85 @@ that needs a `playwright install chromium` step.
 - **Focus trap in the modal — required before GA (accessibility).**
 - **Backdrop-click-to-close — intentionally omitted, keep it that way.**
 
-## Phase 5 — next
+## Phase 5 — Envelope reconciled against the real hosted page (complete, 2026-07-29)
 
-Reconcile the rest of the envelope against the real hosted repo, not just the double: the double
-encodes _my_ understanding of the contract, so it can only catch drift between SDK and double, not
-a shared misunderstanding of the hosted page. Confirm the `source` tag values (`zinid` inbound,
-`zinid-sdk` outbound), the `complete` payload shape, and whether any further `zinid:*` types exist.
-Then wire E2E into CI with a browser-install step.
+The hosted repo's actual implementation was supplied (envelope shape, literal outbound objects,
+re-ping behaviour, `parent_origin` requirement, Permissions-Policy). Two of my Phase 2 assumptions
+were wrong, and **either one alone would have left the channel completely dead in production**.
+
+### Dead channel cause 1 — there is no `source` field
+
+The real envelope is exactly `{ type, payload, v }` in **both** directions. The `zinid:` prefix on
+`type` _is_ the namespacing; a separate `source: 'zinid'` tag was my invention and does not exist.
+Guard 3 required it, so it would have dropped every inbound message.
+
+Now: discriminate on `type.startsWith('zinid:')`. Outbound mirrors the same envelope, with an
+explicit `payload: null` rather than an absent key. The hosted page checks **origin only** on
+inbound and ignores everything else, so the `source: 'zinid-sdk'` tag was dropped rather than kept
+as decoration.
+
+### Dead channel cause 2 — `parent_origin` is SDK-owned and mandatory
+
+The backend mints only the bare session URL. The SDK must append
+`?parent_origin=<its own origin>&mode=<embed|modal|redirect>` before setting `iframe.src`. Without
+`parent_origin` the hosted page builds an **inert channel that never posts anything** — no ready,
+no complete, silence. This was missing entirely and is the likelier cause of a hung flow.
+
+`withFrameParams()` now adds both, preserving the origin, pathname and any params the backend
+already put on the URL. It throws a clear error if the embedding page has an opaque origin
+(`file://`, sandboxed frame), where the handshake cannot work at all.
+
+**This changes architectural rule 5 in CLAUDE.md**, which said the SDK never constructs flow URLs.
+It still never invents a URL, token or path — but it does own these two params. Rule updated.
+
+### Other corrections
+
+- **Envelope version.** `v` is the literal `1`. An unrecognised version emits an `error` with code
+  `unsupported_version` rather than misparsing payloads; a missing `v` is tolerated.
+- **Ready re-pings.** The page posts `zinid:ready` immediately then retries with backoff
+  (500/1000/2000ms, 3 retries) until it hears anything valid. The SDK now auto-replies `zinid:ack`
+  on every ping to halt it, and **surfaces `ready` to the vendor exactly once** — without the
+  dedupe a vendor could have seen up to four `ready` events.
+- **`zinid:ready` carries `payload: null`**, not `{}`.
+- **`CompletePayload` confirmed correct** as built in Phase 1: `session.sessionId` (camelCase),
+  `session.status`, and a top-level `type` string (`"completed"` in practice).
+- **Outbound surface confirmed complete**: the page acts on exactly `zinid:close` and `zinid:ack`.
+  Inbound list of 6 was already exactly right.
+- **`allow="camera; microphone"` confirmed required.** The hosted page sets
+  `Permissions-Policy: camera=(self "https://verify.didit.me")`, and Didit's camera UI runs in a
+  nested cross-origin iframe — without the outer `allow`, the browser strips camera before it ever
+  reaches the page. The SDK already had this; it is now known to be load-bearing, not decorative.
+
+### E2E double now mirrors real behaviour
+
+`e2e/channel-contract.spec.ts` was rewritten to match: the real envelope, the ready re-ping loop,
+and **going inert without `parent_origin`** — so a missing param is a caught failure rather than a
+silent one. 10 tests.
+
+**Mutation-verified against both dead-channel causes:** reinstating the `source` requirement fails
+9 of 10; omitting `parent_origin` fails all 10; removing the ack fails 1.
+
+- Unit tests: 230 passing. E2E: 10 passing. Size budget: **2.73 kB gzipped of 8 KB**.
+
+### Still open
+
+- **`sandbox`** remains deliberately absent. Confirmed guidance: if added it needs `allow-scripts`
+  and `allow-same-origin` (a fully sandboxed origin cannot hold camera permission); forms, popups
+  and downloads are not needed by the hosted page. Whether to sandbox at all still depends on
+  Didit's own embed requirements, which nobody here can see.
+- **Focus trap** — required before GA (accessibility).
+- **Not yet run against the real staging page.** The double still encodes a second-hand reading of
+  the contract. `static/harness.html` in the hosted repo is the canonical reference embedder and
+  was **not** available from this repo, so the SDK has not been diffed against it.
+- The staging host is temporary and must not be hardcoded anywhere.
+
+## Phase 6 — next
+
+1. **Run against the real staging page with a live token.** This is the last unverified step: the
+   double now mirrors the hosted implementation as described, but only a real session proves it.
+   Take the staging host from config or an env var — it is temporary and must never be hardcoded.
+2. **Diff the SDK's message handling against `static/harness.html`** in the hosted repo, the
+   canonical reference embedder. It was not reachable from this repo during Phase 5.
+3. **Wire E2E into CI** with a `playwright install chromium` step.
+4. **Focus trap** for the modal, required before GA.
+5. Decide the `sandbox` question against Didit's embed requirements.

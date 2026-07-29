@@ -20,17 +20,25 @@ import type {
   ZinIDEventMap,
 } from './types';
 
-/** Tag on messages sent by the hosted page. */
-const INBOUND_SOURCE = 'zinid';
+/**
+ * The `zinid:` prefix on `type` *is* the namespacing. There is no `source` tag
+ * on the wire in either direction — the envelope is exactly
+ * `{ type, payload, v }` — so the prefix is what distinguishes our traffic from
+ * everything else that lands on the window.
+ */
+const TYPE_PREFIX = 'zinid:';
 
-/** Tag on messages sent by this SDK. */
-const OUTBOUND_SOURCE = 'zinid-sdk';
+/** Envelope version. Both sides currently speak 1. */
+const PROTOCOL_VERSION = 1;
+
+/** Asks the hosted page to tear down. It answers with `zinid:cancel`. */
+export const CLOSE_REQUEST = 'zinid:close';
 
 /**
- * Message types are namespaced with a `zinid:` prefix on the wire. The prefix
- * is canonical and owned by the hosted page — never match the bare names.
+ * Halts the hosted page's ready re-ping. Sent automatically on receipt of
+ * `zinid:ready`; the page re-pings with backoff until it hears anything valid.
  */
-export const CLOSE_REQUEST = 'zinid:close';
+export const ACK = 'zinid:ack';
 
 /** Error code used when a message is provably ours but does not match the contract. */
 const INVALID_MESSAGE = 'invalid_message';
@@ -128,6 +136,9 @@ export class Channel {
   /** Set only while listening; also what gates outbound posts. */
   private scope: MessageScope | undefined;
 
+  /** Guards against the ready re-ping surfacing to the vendor more than once. */
+  private readyEmitted = false;
+
   private readonly listener = (event: MessageEvent): void => {
     this.handleMessage(event);
   };
@@ -149,6 +160,7 @@ export class Channel {
   /** Begin listening. Calling it again while already listening is a no-op. */
   start(): void {
     if (this.scope) return;
+    this.readyEmitted = false;
     // Resolved here rather than at construction so nothing touches a global
     // during a server render.
     this.scope = this.configuredScope ?? (globalThis as unknown as MessageScope);
@@ -162,14 +174,14 @@ export class Channel {
     this.scope = undefined;
   }
 
-  /** Send a message to the hosted page, always addressed to the exact trusted origin. */
-  post(type: string, payload?: unknown): void {
+  /**
+   * Send a message to the hosted page, always addressed to the exact trusted
+   * origin. The envelope mirrors the inbound one: `{ type, payload, v }`, with
+   * an explicit null payload rather than an absent key.
+   */
+  post(type: string, payload: unknown = null): void {
     if (!this.scope) return;
-    const message =
-      payload === undefined
-        ? { source: OUTBOUND_SOURCE, type }
-        : { source: OUTBOUND_SOURCE, type, payload };
-    this.peer.postMessage(message, this.origin);
+    this.peer.postMessage({ type, payload, v: PROTOCOL_VERSION }, this.origin);
   }
 
   private handleMessage(event: MessageEvent): void {
@@ -181,10 +193,23 @@ export class Channel {
     // on the same origin could drive this flow.
     if ((event.source as unknown) !== (this.peer as unknown)) return;
 
-    // Guard 3: our envelope. The window receives plenty of traffic that was
-    // never addressed to us.
+    // Guard 3: our namespace. The window receives plenty of traffic that was
+    // never addressed to us, and the `zinid:` prefix on the type is the only
+    // thing marking ours — there is no source tag on the wire.
     const data: unknown = event.data;
-    if (!isRecord(data) || data.source !== INBOUND_SOURCE || typeof data.type !== 'string') return;
+    if (!isRecord(data) || typeof data.type !== 'string' || !data.type.startsWith(TYPE_PREFIX)) {
+      return;
+    }
+
+    // The envelope is versioned. An unrecognised version means payload shapes
+    // this SDK cannot be trusted to read, so say so rather than misparse them.
+    if (data.v !== undefined && data.v !== PROTOCOL_VERSION) {
+      this.emitter.emit('error', {
+        code: 'unsupported_version',
+        message: `The verification flow speaks envelope version ${String(data.v)}; this SDK speaks ${PROTOCOL_VERSION}.`,
+      });
+      return;
+    }
 
     // Message types are namespaced on the wire. Matching the bare names here
     // silently drops every inbound message, which no unit test using the same
@@ -192,6 +217,11 @@ export class Channel {
     const payload: unknown = data.payload;
     switch (data.type) {
       case 'zinid:ready':
+        // The page re-pings ready with backoff until it hears anything valid
+        // from us, so acknowledge every ping but surface it to the vendor once.
+        this.post(ACK);
+        if (this.readyEmitted) return;
+        this.readyEmitted = true;
         this.emitter.emit('ready');
         return;
       case 'zinid:cancel':

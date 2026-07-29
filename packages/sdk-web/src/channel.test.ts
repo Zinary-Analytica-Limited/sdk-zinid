@@ -39,7 +39,7 @@ type Peer = ReturnType<typeof createPeer>;
 
 /** A well-formed inbound envelope from the hosted page. */
 function message(type: string, payload?: unknown) {
-  return payload === undefined ? { source: 'zinid', type } : { source: 'zinid', type, payload };
+  return { type, payload: payload ?? null, v: 1 };
 }
 
 const COMPLETE_PAYLOAD = {
@@ -291,16 +291,19 @@ describe('Channel', () => {
       channel.start();
     });
 
+    // There is no `source` tag on the wire: the `zinid:` prefix on `type` is the
+    // only thing marking a message as ours.
     const notOurs: Array<[string, unknown]> = [
       ['null', null],
       ['undefined', undefined],
-      ['a string', 'ready'],
+      ['a string', 'zinid:ready'],
       ['a number', 42],
-      ['an array', [{ source: 'zinid', type: 'zinid:ready' }]],
-      ['an object with no source tag', { type: 'zinid:ready' }],
-      ['an object tagged for another sender', { source: 'other-sdk', type: 'zinid:ready' }],
-      ['an object with a non-string type', { source: 'zinid', type: 7 }],
-      ['an object with no type', { source: 'zinid' }],
+      ['an array wrapping a valid envelope', [{ type: 'zinid:ready', payload: null, v: 1 }]],
+      ['an unprefixed type', { type: 'ready', payload: null, v: 1 }],
+      ['another sender’s namespace', { type: 'other:ready', payload: null, v: 1 }],
+      ['a type that merely mentions ours', { type: 'not-zinid:ready', payload: null, v: 1 }],
+      ['a non-string type', { type: 7, payload: null, v: 1 }],
+      ['no type at all', { payload: null, v: 1 }],
     ];
 
     it.each(notOurs)('drops %s without emitting anything', (_label, data) => {
@@ -348,7 +351,7 @@ describe('Channel', () => {
       const handler = vi.fn();
       emitter.on(event as 'ready', handler);
 
-      deliver({ source: 'zinid', type: wireType, payload });
+      deliver({ type: wireType, payload, v: 1 });
 
       expect(handler).toHaveBeenCalledTimes(1);
     });
@@ -361,7 +364,7 @@ describe('Channel', () => {
       emitter.on(wireType === 'error' ? 'cancel' : 'ready', handler);
       emitter.on('error', onError);
 
-      deliver({ source: 'zinid', type: wireType, payload: COMPLETE_PAYLOAD });
+      deliver({ type: wireType, payload: COMPLETE_PAYLOAD, v: 1 });
 
       expect(handler).not.toHaveBeenCalled();
       expect(onError).not.toHaveBeenCalled();
@@ -372,7 +375,7 @@ describe('Channel', () => {
       const onError = vi.fn();
       emitter.on('error', onError);
 
-      deliver({ source: 'zinid', type: 'zinid:teleported', payload: { anything: true } });
+      deliver({ type: 'zinid:teleported', payload: { anything: true }, v: 1 });
 
       expect(onError).not.toHaveBeenCalled();
     });
@@ -381,9 +384,125 @@ describe('Channel', () => {
       channel.post(CLOSE_REQUEST);
 
       expect(peer.postMessage.mock.calls[0]?.[0]).toEqual({
-        source: 'zinid-sdk',
         type: 'zinid:close',
+        payload: null,
+        v: 1,
       });
+    });
+  });
+
+  describe('envelope shape', () => {
+    beforeEach(() => {
+      channel.start();
+    });
+
+    // These literals are the hosted page's actual outbound objects, copied from
+    // its own source. There is no `source` field in either direction.
+    it('accepts the hosted page’s literal ready envelope', () => {
+      const handler = vi.fn();
+      emitter.on('ready', handler);
+
+      deliver({ type: 'zinid:ready', payload: null, v: 1 });
+
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it('accepts the hosted page’s literal complete envelope', () => {
+      const handler = vi.fn();
+      emitter.on('complete', handler);
+
+      deliver({
+        type: 'zinid:complete',
+        payload: {
+          session: { sessionId: '4c83e425-0000-4000-8000-000000000000', status: 'Approved' },
+          type: 'completed',
+        },
+        v: 1,
+      });
+
+      expect(handler).toHaveBeenCalledWith({
+        session: { sessionId: '4c83e425-0000-4000-8000-000000000000', status: 'Approved' },
+        type: 'completed',
+      });
+    });
+
+    it('sends the mirrored envelope, with an explicit null payload and no source tag', () => {
+      channel.post(CLOSE_REQUEST);
+
+      expect(peer.postMessage.mock.calls[0]?.[0]).toEqual({
+        type: 'zinid:close',
+        payload: null,
+        v: 1,
+      });
+    });
+
+    it('reports an unsupported envelope version rather than misreading it', () => {
+      const onError = vi.fn();
+      emitter.on('error', onError);
+      const onReady = vi.fn();
+      emitter.on('ready', onReady);
+
+      deliver({ type: 'zinid:ready', payload: null, v: 2 });
+
+      expect(onReady).not.toHaveBeenCalled();
+      expect(onError.mock.calls[0]?.[0]).toMatchObject({ code: 'unsupported_version' });
+    });
+
+    it('tolerates a missing version field', () => {
+      const handler = vi.fn();
+      emitter.on('ready', handler);
+
+      deliver({ type: 'zinid:ready', payload: null });
+
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('ready re-ping', () => {
+    beforeEach(() => {
+      channel.start();
+    });
+
+    // The hosted page re-pings ready with backoff (500/1000/2000ms, 3 retries)
+    // until it hears something valid back.
+    it('acknowledges ready so the page stops re-pinging', () => {
+      deliver({ type: 'zinid:ready', payload: null, v: 1 });
+
+      expect(peer.postMessage).toHaveBeenCalledWith(
+        { type: 'zinid:ack', payload: null, v: 1 },
+        ORIGIN,
+      );
+    });
+
+    it('surfaces ready to the vendor only once across every re-ping', () => {
+      const handler = vi.fn();
+      emitter.on('ready', handler);
+
+      deliver({ type: 'zinid:ready', payload: null, v: 1 });
+      deliver({ type: 'zinid:ready', payload: null, v: 1 });
+      deliver({ type: 'zinid:ready', payload: null, v: 1 });
+      deliver({ type: 'zinid:ready', payload: null, v: 1 });
+
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it('acknowledges every re-ping, not just the first', () => {
+      deliver({ type: 'zinid:ready', payload: null, v: 1 });
+      deliver({ type: 'zinid:ready', payload: null, v: 1 });
+
+      expect(peer.postMessage).toHaveBeenCalledTimes(2);
+    });
+
+    it('surfaces ready again after a restart', () => {
+      const handler = vi.fn();
+      emitter.on('ready', handler);
+      deliver({ type: 'zinid:ready', payload: null, v: 1 });
+      channel.destroy();
+      channel.start();
+
+      deliver({ type: 'zinid:ready', payload: null, v: 1 });
+
+      expect(handler).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -396,7 +515,7 @@ describe('Channel', () => {
       scope.dispatch({
         origin: ORIGIN,
         source: peer,
-        data: { source: 'zinid', type: 'zinid:resize', payload: { height: 640 } },
+        data: { type: 'zinid:resize', payload: { height: 640 }, v: 1 },
       });
 
       expect(onResize).toHaveBeenCalledWith({ height: 640 });
@@ -408,7 +527,7 @@ describe('Channel', () => {
       emitter.on('error', onError);
       channel.start();
 
-      deliver({ source: 'zinid', type: 'zinid:resize', payload: { height: 640 } });
+      deliver({ type: 'zinid:resize', payload: { height: 640 }, v: 1 });
 
       // No consumer configured for this channel, so nothing happens at all.
       expect(onError).not.toHaveBeenCalled();
@@ -430,7 +549,7 @@ describe('Channel', () => {
       scope.dispatch({
         origin: ORIGIN,
         source: peer,
-        data: { source: 'zinid', type: 'zinid:resize', payload },
+        data: { type: 'zinid:resize', payload, v: 1 },
       });
 
       expect(onResize).not.toHaveBeenCalled();
@@ -447,7 +566,7 @@ describe('Channel', () => {
       scope.dispatch({
         origin: 'https://evil.example',
         source: peer,
-        data: { source: 'zinid', type: 'zinid:resize', payload: { height: 640 } },
+        data: { type: 'zinid:resize', payload: { height: 640 }, v: 1 },
       });
 
       expect(onResize).not.toHaveBeenCalled();
@@ -632,8 +751,9 @@ describe('Channel', () => {
       channel.post(CLOSE_REQUEST);
 
       expect(peer.postMessage.mock.calls[0]?.[0]).toEqual({
-        source: 'zinid-sdk',
         type: 'zinid:close',
+        payload: null,
+        v: 1,
       });
     });
 
@@ -643,9 +763,9 @@ describe('Channel', () => {
       channel.post('configure', { locale: 'en' });
 
       expect(peer.postMessage.mock.calls[0]?.[0]).toEqual({
-        source: 'zinid-sdk',
         type: 'configure',
         payload: { locale: 'en' },
+        v: 1,
       });
     });
 

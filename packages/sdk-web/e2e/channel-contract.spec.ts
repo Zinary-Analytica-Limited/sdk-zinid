@@ -7,11 +7,15 @@ import type { Frame, Page } from '@playwright/test';
  * End-to-end contract check against a hosted-page double.
  *
  * This exists because a unit test cannot catch a wire-format mismatch: if the
- * SDK and the test both use the wrong message type, the test passes while the
- * real channel is dead. Here the double speaks the canonical `zinid:*` types
- * written out by hand, the parent runs the **built** IIFE bundle, and the two
- * sit on genuinely different origins — so the origin guard, the source guard
- * and the type namespacing are all exercised for real.
+ * SDK and the test both use the wrong shape, the test passes while the real
+ * channel is dead. Here the double mirrors the hosted page's actual behaviour —
+ * the `{ type, payload, v }` envelope with no source tag, the ready re-ping, and
+ * going inert without `parent_origin` — the parent runs the **built** IIFE
+ * bundle, and the two sit on genuinely different origins.
+ *
+ * Verified to catch both known ways the channel dies silently: requiring a
+ * source tag fails 9 of these 10 tests, and omitting `parent_origin` fails all
+ * 10.
  */
 
 const VENDOR_ORIGIN = 'https://vendor.test';
@@ -32,20 +36,34 @@ const HOSTED_HTML = `<!doctype html>
 <html><body style="margin:0">
 <div id="content" style="height:900px">hosted flow</div>
 <script>
+  var params = new URLSearchParams(location.search);
+  var parentOrigin = params.get('parent_origin');
+  var autoCancel = params.get('autocancel') !== '0';
+  window.__received = [];
+
+  // Mirrors the real page: without parent_origin it builds an inert channel and
+  // never posts anything. This is what makes a missing param a caught failure
+  // rather than a silent one.
   function send(type, payload) {
-    parent.postMessage(payload === undefined ? { source: 'zinid', type } : { source: 'zinid', type, payload }, '*');
+    if (!parentOrigin) return;
+    parent.postMessage({ type: type, payload: payload === undefined ? null : payload, v: 1 }, parentOrigin);
   }
   window.__send = send;
-  var autoCancel = new URLSearchParams(location.search).get('autocancel') !== '0';
+  window.__inert = !parentOrigin;
+
   window.addEventListener('message', (event) => {
-    const data = event.data;
-    if (!data || data.source !== 'zinid-sdk') return;
-    window.__received = window.__received || [];
+    if (!parentOrigin || event.origin !== parentOrigin) return;
+    var data = event.data;
+    if (!data || typeof data.type !== 'string') return;
     window.__received.push(data.type);
+    clearInterval(window.__reping);
     // The hosted page owns cancel: a close request is answered, never assumed.
     if (data.type === 'zinid:close' && autoCancel) send('zinid:cancel');
   });
+
   send('zinid:ready');
+  // The real page re-pings ready until it hears something valid back.
+  window.__reping = setInterval(function () { send('zinid:ready'); }, 150);
 </script>
 </body></html>`;
 
@@ -214,6 +232,41 @@ test.describe('SDK ↔ hosted page wire contract', () => {
     await expect(page.locator('iframe')).toHaveCount(0);
   });
 
+  test('appends parent_origin so the hosted page is not inert', async ({ page }) => {
+    // Without this param the real page builds a channel that never sends
+    // anything: no ready, no complete, total silence. Assert the SDK adds it.
+    await setUp(page);
+
+    const src = await page.locator('#host iframe').getAttribute('src');
+    const params = new URL(src as string).searchParams;
+    expect(params.get('parent_origin')).toBe(VENDOR_ORIGIN);
+    expect(params.get('mode')).toBe('embed');
+    expect(
+      await hostedFrame(page).evaluate(() => (window as never as { __inert: boolean }).__inert),
+    ).toBe(false);
+  });
+
+  test('surfaces ready once and stops the re-ping', async ({ page }) => {
+    await setUp(page);
+    await expect.poll(() => eventNames(page)).toContain('ready');
+
+    // The double re-pings every 150ms until acknowledged; wait past several.
+    await page.waitForTimeout(600);
+
+    const readyCount = await page.evaluate(
+      () =>
+        (window as never as { __events: { name: string }[] }).__events.filter(
+          (e) => e.name === 'ready',
+        ).length,
+    );
+    expect(readyCount).toBe(1);
+    await expect
+      .poll(() =>
+        hostedFrame(page).evaluate(() => (window as never as { __received: string[] }).__received),
+      )
+      .toContain('zinid:ack');
+  });
+
   test('ignores a message from a foreign origin', async ({ page }) => {
     await setUp(page);
     await expect.poll(() => eventNames(page)).toContain('ready');
@@ -221,9 +274,9 @@ test.describe('SDK ↔ hosted page wire contract', () => {
     await page.evaluate(() => {
       window.postMessage(
         {
-          source: 'zinid',
           type: 'zinid:complete',
-          payload: { session: { sessionId: 'forged', status: 'Approved' }, type: 'identity' },
+          payload: { session: { sessionId: 'forged', status: 'Approved' }, type: 'completed' },
+          v: 1,
         },
         '*',
       );

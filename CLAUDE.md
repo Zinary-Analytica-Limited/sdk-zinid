@@ -51,8 +51,15 @@ A future `packages/react` and shared `examples/` fit alongside without restructu
 4. **One emitter.** All event notification funnels through a single emitter per instance, so
    options-object handlers (`onComplete: ...`) and `.on('complete', ...)` never shadow each other —
    both are subscriptions on the same emitter.
-5. **The SDK never constructs flow URLs.** It loads the session URL it is given by the vendor
-   (which their backend obtained from the ZinID API).
+5. **The SDK never invents flow URLs, but it does own the frame params.** The backend mints only
+   the bare session URL; the SDK loads that URL and appends the two params the hosted page reads
+   from its own `location.search`:
+   - `parent_origin` — **not optional.** Without it the hosted page builds an inert channel and
+     never posts anything: no ready, no complete, silence. This is SDK-owned, not backend-owned.
+   - `mode` — one of `embed | modal | redirect`.
+
+   It never builds a URL, a token, or a path from scratch, and never rewrites the origin or
+   pathname it was given.
 
 ## Workflow rules
 

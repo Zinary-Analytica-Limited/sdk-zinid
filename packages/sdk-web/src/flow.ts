@@ -70,6 +70,29 @@ export interface ZinIDFlow {
   destroy(): void;
 }
 
+/**
+ * Add the parameters the hosted page reads from its own `location.search`.
+ *
+ * `parent_origin` is not optional: without it the hosted page builds an inert
+ * channel and never posts anything — no ready, no complete, silence. The SDK
+ * owns this, not the backend, which mints only the bare session URL.
+ *
+ * This appends to the URL it was given; it never invents one.
+ */
+export function withFrameParams(sessionUrl: string, mode: ZinIDFlowMode): string {
+  const parentOrigin = globalThis.location?.origin;
+  if (!parentOrigin || parentOrigin === 'null') {
+    throw new Error(
+      'The verification flow needs this page to have a real origin, but it has an opaque one ' +
+        '(file://, a sandboxed frame, or similar). Serve the page over http or https.',
+    );
+  }
+  const url = new URL(sessionUrl);
+  url.searchParams.set('parent_origin', parentOrigin);
+  url.searchParams.set('mode', mode);
+  return url.toString();
+}
+
 function resolveContainer(target: HTMLElement | string): HTMLElement {
   if (typeof target !== 'string') return target;
   const found = document.querySelector(target);
@@ -79,8 +102,9 @@ function resolveContainer(target: HTMLElement | string): HTMLElement {
 
 function createIframe(url: string, mode: ZinIDFlowMode): HTMLIFrameElement {
   const iframe = document.createElement('iframe');
-  // The session URL is loaded exactly as the backend issued it. The SDK never
-  // builds or rewrites a flow URL.
+  // The session URL comes from the backend; the SDK only appends the frame
+  // params the hosted page requires (see withFrameParams). It never invents a
+  // URL, a token, or a path.
   iframe.setAttribute('src', url);
   iframe.setAttribute('title', IFRAME_TITLE);
   iframe.setAttribute('allow', IFRAME_ALLOW);
@@ -194,14 +218,14 @@ export function createFlow(options: ZinIDFlowOptions): ZinIDFlow {
 
   function mount(target?: HTMLElement | string): void {
     if (mode === 'redirect') {
-      globalThis.location.assign(options.url);
+      globalThis.location.assign(withFrameParams(options.url, mode));
       return;
     }
     if (iframe) return;
 
     if (mode === 'modal') {
       overlay = createOverlay();
-      iframe = createIframe(options.url, 'modal');
+      iframe = createIframe(withFrameParams(options.url, mode), 'modal');
       overlay.append(iframe);
       previousOverflow = document.body.style.overflow;
       document.body.style.overflow = 'hidden';
@@ -218,7 +242,7 @@ export function createFlow(options: ZinIDFlowOptions): ZinIDFlow {
         );
       }
       const container = resolveContainer(requested);
-      iframe = createIframe(options.url, mode);
+      iframe = createIframe(withFrameParams(options.url, mode), mode);
       container.append(iframe);
     }
 

@@ -23,7 +23,7 @@ function deliverFrom(iframe: HTMLIFrameElement, type: string, payload?: unknown)
     new MessageEvent('message', {
       origin: ORIGIN,
       source: iframe.contentWindow,
-      data: payload === undefined ? { source: 'zinid', type } : { source: 'zinid', type, payload },
+      data: { type, payload: payload ?? null, v: 1 },
     }),
   );
 }
@@ -190,7 +190,7 @@ describe('createFlow', () => {
         new MessageEvent('message', {
           origin: 'https://evil.example',
           source: (findIframe(host) as HTMLIFrameElement).contentWindow,
-          data: { source: 'zinid', type: 'zinid:complete', payload: COMPLETE_PAYLOAD },
+          data: { type: 'zinid:complete', payload: COMPLETE_PAYLOAD, v: 1 },
         }),
       );
 
@@ -247,12 +247,46 @@ describe('createFlow', () => {
       expect(() => make({ url: URL_ }).mount('#nope')).toThrow(/#nope/);
     });
 
-    it('loads the session url exactly as given, without rewriting it', () => {
+    it('keeps the session url the backend issued, appending only the frame params', () => {
       const host = document.createElement('div');
       document.body.append(host);
       make({ url: URL_ }).mount(host);
 
-      expect((findIframe(host) as HTMLIFrameElement).getAttribute('src')).toBe(URL_);
+      const src = new URL((findIframe(host) as HTMLIFrameElement).getAttribute('src') as string);
+      const original = new URL(URL_);
+      expect(src.origin).toBe(original.origin);
+      expect(src.pathname).toBe(original.pathname);
+      expect([...src.searchParams.keys()].sort()).toEqual(['mode', 'parent_origin']);
+    });
+
+    it('appends parent_origin, without which the hosted page never sends anything', () => {
+      // The hosted page reads parent_origin from its own location.search and
+      // builds an inert channel if it is absent — a silent, total failure.
+      const host = document.createElement('div');
+      document.body.append(host);
+      make({ url: URL_ }).mount(host);
+
+      const src = new URL((findIframe(host) as HTMLIFrameElement).getAttribute('src') as string);
+      expect(src.searchParams.get('parent_origin')).toBe(window.location.origin);
+    });
+
+    it.each(['embed', 'modal'] as const)('appends the %s mode', (mode) => {
+      const host = document.createElement('div');
+      document.body.append(host);
+      make({ url: URL_, mode }).mount(host);
+
+      const src = new URL((findIframe() as HTMLIFrameElement).getAttribute('src') as string);
+      expect(src.searchParams.get('mode')).toBe(mode);
+    });
+
+    it('preserves query params the backend put on the session url', () => {
+      const host = document.createElement('div');
+      document.body.append(host);
+      make({ url: `${URL_}?ref=partner123` }).mount(host);
+
+      const src = new URL((findIframe(host) as HTMLIFrameElement).getAttribute('src') as string);
+      expect(src.searchParams.get('ref')).toBe('partner123');
+      expect(src.searchParams.get('parent_origin')).toBe(window.location.origin);
     });
 
     it('grants camera and microphone to the hosted page', () => {
@@ -454,7 +488,7 @@ describe('createFlow', () => {
 
       pressEscape();
 
-      expect(post).toHaveBeenCalledWith({ source: 'zinid-sdk', type: 'zinid:close' }, ORIGIN);
+      expect(post).toHaveBeenCalledWith({ type: 'zinid:close', payload: null, v: 1 }, ORIGIN);
     });
 
     it('does not emit cancel itself', () => {
@@ -672,7 +706,10 @@ describe('createFlow', () => {
 
       make({ url: URL_, mode: 'redirect' }).mount();
 
-      expect(assign).toHaveBeenCalledWith(URL_);
+      const navigated = new URL(assign.mock.calls[0]?.[0] as string);
+      expect(navigated.pathname).toBe(new URL(URL_).pathname);
+      expect(navigated.searchParams.get('mode')).toBe('redirect');
+      expect(navigated.searchParams.get('parent_origin')).toBe(window.location.origin);
     });
 
     it('creates no iframe and no overlay', () => {
@@ -693,7 +730,7 @@ describe('createFlow', () => {
         new MessageEvent('message', {
           origin: ORIGIN,
           source: window,
-          data: { source: 'zinid', type: 'zinid:complete', payload: COMPLETE_PAYLOAD },
+          data: { type: 'zinid:complete', payload: COMPLETE_PAYLOAD, v: 1 },
         }),
       );
 
