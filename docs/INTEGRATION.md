@@ -25,28 +25,32 @@ pnpm add /absolute/path/to/sdk-zinid/packages/sdk-web/zinid-sdk-web-0.0.0.tgz
 Re-run `pnpm pack` and re-install after each SDK change. Deliberate and explicit — good for
 verifying a change, tedious for iterating.
 
-### Option B — link (best for iterating)
+### Option B — link by path (best for iterating)
+
+Link the directory directly. **Do not use `pnpm link --global`** — on pnpm 10 it installs into the
+global root instead of your project, reporting success against
+`~/Library/pnpm/global/<n>` while your `node_modules` stays empty.
 
 ```sh
-# in this repo
-cd packages/sdk-web
-pnpm build
-pnpm link --global
+# in this repo — the link points at dist/, so it must exist
+pnpm --filter @zinid/sdk-web build
 
-# in your React repo
-pnpm link --global @zinid/sdk-web
+# in your React repo, with a path relative to it
+pnpm link ../sdk-zinid/packages/sdk-web
 ```
 
-Then leave a watcher running in this repo so every save rebuilds `dist/`:
+That adds `"@zinid/sdk-web": "link:../sdk-zinid/packages/sdk-web"` to your dependencies and
+symlinks it. Then leave a watcher running here so every save rebuilds `dist/`:
 
 ```sh
 pnpm --filter @zinid/sdk-web dev      # tsup --watch
 ```
 
-Your app's dev server picks up the rebuilt files. Vite sometimes caches linked deps — if a change
-does not appear, restart it with `--force`.
+Vite pre-bundles dependencies and caches them, so after the first link — and after any change that
+alters the SDK's exports — restart the dev server with `--force`. A plain restart is not always
+enough.
 
-To undo: `pnpm unlink --global @zinid/sdk-web` in your app.
+To undo: `pnpm remove @zinid/sdk-web` in your app.
 
 ### Option C — file: path
 
@@ -256,8 +260,18 @@ other, and both fire.
 If the handshake is broken you will see nothing at all: no events, no errors, an iframe that just
 sits there. Check, in order:
 
-1. The iframe's `src` in devtools carries `?parent_origin=<your app's origin>&mode=embed`. Without
+1. The link resolves at all:
+
+   ```sh
+   ls node_modules/@zinid/sdk-web/dist        # should list zinid.js, zinid.d.ts, …
+   node -e "console.log(require.resolve('@zinid/sdk-web'))"
+   ```
+
+   An empty or missing `node_modules/@zinid/` means the link never landed, whatever the command
+   printed.
+
+2. The iframe's `src` in devtools carries `?parent_origin=<your app's origin>&mode=embed`. Without
    `parent_origin` the hosted page never sends anything.
-2. Your app's origin matches that value exactly, including scheme and port.
-3. `onError` is wired — an `invalid_message` or `unsupported_version` code means the SDK and the
+3. Your app's origin matches that value exactly, including scheme and port.
+4. `onError` is wired — an `invalid_message` or `unsupported_version` code means the SDK and the
    hosted page disagree about the wire format, and the SDK version needs updating.
