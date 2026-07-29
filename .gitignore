@@ -5,3 +5,8 @@ playwright-report/
 test-results/
 *.tsbuildinfo
 .DS_Store
+
+# Live session URLs and tokens. Never commit these.
+.env
+.env.*
+!.env.example

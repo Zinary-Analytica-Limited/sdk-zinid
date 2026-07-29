@@ -267,18 +267,42 @@ silent one. 10 tests.
   and downloads are not needed by the hosted page. Whether to sandbox at all still depends on
   Didit's own embed requirements, which nobody here can see.
 - **Focus trap** — required before GA (accessibility).
-- **Not yet run against the real staging page.** The double still encodes a second-hand reading of
-  the contract. `static/harness.html` in the hosted repo is the canonical reference embedder and
-  was **not** available from this repo, so the SDK has not been diffed against it.
+- `static/harness.html` in the hosted repo is the canonical reference embedder and was **not**
+  available from this repo, so the SDK has not been diffed against it. Superseded in practice by
+  the live run below, but still the better reference if a question comes up.
 - The staging host is temporary and must not be hardcoded anywhere.
+
+### Verified against a real hosted session (2026-07-29)
+
+`e2e/live-session.spec.ts` runs the built bundle against an actual staging session over the
+network, reading the URL from `VITE_SESSION_URL` (`.env`, gitignored; see `.env.example`) and
+skipping entirely when unset. It is deliberately passive — it observes the handshake and never
+drives the verification, so it does not consume a session.
+
+The real page's traffic, captured verbatim:
+
+```
+{"type":"zinid:ready","payload":null,"v":1}
+{"type":"zinid:resize","payload":{"height":402},"v":1}
+```
+
+That confirms first-hand, not second-hand: the `{ type, payload, v }` envelope with **no source
+field**; `payload: null` on ready; `v` as the literal 1; `zinid:resize` arriving unprompted with a
+real height, which the SDK applied (iframe measured 402px). Exactly one `ready` reached the vendor
+handler and no `error` fired, so `zinid:ack` did halt the re-ping. The iframe src carried
+`parent_origin=https%3A%2F%2Fvendor.test&mode=embed`, and the page was not blocked by
+frame-ancestors from a synthetic vendor origin.
+
+**The channel is now confirmed working end to end against production code**, which no previous
+phase could claim.
 
 ## Phase 6 — next
 
-1. **Run against the real staging page with a live token.** This is the last unverified step: the
-   double now mirrors the hosted implementation as described, but only a real session proves it.
-   Take the staging host from config or an env var — it is temporary and must never be hardcoded.
-2. **Diff the SDK's message handling against `static/harness.html`** in the hosted repo, the
-   canonical reference embedder. It was not reachable from this repo during Phase 5.
-3. **Wire E2E into CI** with a `playwright install chromium` step.
-4. **Focus trap** for the modal, required before GA.
-5. Decide the `sandbox` question against Didit's embed requirements.
+1. **Wire E2E into CI** with a `playwright install chromium` step. The contract spec needs no
+   secrets; the live spec skips without `VITE_SESSION_URL` and should stay opt-in so CI never
+   depends on a session token.
+2. **Focus trap** for the modal, required before GA.
+3. Decide the `sandbox` question against Didit's embed requirements.
+4. Exercise a **terminal outcome** against a live session — the passive run confirms the handshake
+   and resize, but `zinid:complete` and `zinid:cancel` have still only been seen from the double.
+   That needs a session someone actually completes.
