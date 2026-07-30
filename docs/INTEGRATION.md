@@ -100,8 +100,11 @@ interface ZinIDHandlers {
 }
 
 /**
- * Inline embed. The iframe sizes itself from the hosted page's resize messages,
- * so give the wrapper a width and let the height look after itself.
+ * Inline embed. The iframe fills its container and is capped to the viewport;
+ * the hosted page scrolls its own content, so the frame height never changes
+ * after mount. Give the wrapper the width and height you want the flow to
+ * occupy — if it has no height of its own, the frame falls back to a floor
+ * rather than collapsing.
  */
 export function ZinIDEmbed({
   sessionUrl,

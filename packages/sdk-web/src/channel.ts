@@ -12,13 +12,7 @@
  */
 
 import type { Emitter } from './emitter';
-import type {
-  CompletePayload,
-  ErrorPayload,
-  ResizePayload,
-  StepChangePayload,
-  ZinIDEventMap,
-} from './types';
+import type { CompletePayload, ErrorPayload, StepChangePayload, ZinIDEventMap } from './types';
 
 /**
  * The `zinid:` prefix on `type` *is* the namespacing. There is no `source` tag
@@ -65,11 +59,6 @@ export interface ChannelOptions {
   peer: PeerWindow;
   /** Listener scope. Defaults to the global object, resolved at `start()`. */
   scope?: MessageScope;
-  /**
-   * Called when the hosted page reports a settled height. Left unset by modes
-   * that hold a fixed box, so an unwanted resize is ignored at the source.
-   */
-  onResize?: (payload: ResizePayload) => void;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -100,10 +89,6 @@ function isErrorPayload(value: unknown): value is ErrorPayload {
   return isRecord(value) && typeof value.code === 'string' && typeof value.message === 'string';
 }
 
-function isResizePayload(value: unknown): value is ResizePayload {
-  return isRecord(value) && typeof value.height === 'number' && Number.isFinite(value.height);
-}
-
 /**
  * Derive the origin to trust from a session URL.
  *
@@ -131,7 +116,6 @@ export class Channel {
   private readonly origin: string;
   private readonly peer: PeerWindow;
   private readonly configuredScope: MessageScope | undefined;
-  private readonly onResize: ((payload: ResizePayload) => void) | undefined;
 
   /** Set only while listening; also what gates outbound posts. */
   private scope: MessageScope | undefined;
@@ -154,7 +138,6 @@ export class Channel {
     this.origin = origin;
     this.peer = options.peer;
     this.configuredScope = options.scope;
-    this.onResize = options.onResize;
   }
 
   /** Begin listening. Calling it again while already listening is a no-op. */
@@ -238,12 +221,6 @@ export class Channel {
       case 'zinid:error':
         if (!isErrorPayload(payload)) return this.reject(data.type);
         this.emitter.emit('error', payload);
-        return;
-      case 'zinid:resize':
-        // Not a vendor-facing event: it drives iframe layout, and only the
-        // mode that owns a resizable frame subscribes to it.
-        if (!isResizePayload(payload)) return this.reject(data.type);
-        this.onResize?.(payload);
         return;
       default:
         // A newer hosted page may send events this SDK version predates.

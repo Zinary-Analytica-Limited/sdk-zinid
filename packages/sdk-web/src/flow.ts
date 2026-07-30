@@ -8,10 +8,8 @@
  */
 
 import { Channel, CLOSE_REQUEST, originFromUrl } from './channel';
-import type { ChannelOptions } from './channel';
 import { Emitter } from './emitter';
 import type {
-  ResizePayload,
   ZinIDEventHandler,
   ZinIDEventMap,
   ZinIDEventName,
@@ -33,26 +31,14 @@ const IFRAME_ALLOW = 'camera; microphone';
 const IFRAME_TITLE = 'Identity verification';
 
 /**
- * Starting height for an embedded frame, so it never renders at zero and
- * flashes empty before the first settled measurement arrives.
+ * Floor for the embedded frame, so it never renders at zero and flashes empty
+ * when the vendor's container has no intrinsic height. Bounded by the viewport
+ * so a short screen is never overflowed.
  */
-export const EMBED_INITIAL_HEIGHT = 480;
+export const EMBED_MIN_HEIGHT = 480;
 
-/**
- * Floor applied to every reported height. The hosted page has its own floor;
- * this mirrors it rather than trusting it, so a momentary small measurement
- * cannot collapse the frame.
- */
-export const SDK_MIN_HEIGHT = 340;
-
-/** Modal holds a stable box and never resizes per message. */
+/** Modal holds a stable box. */
 export const MODAL_HEIGHT = 520;
-
-/**
- * The SDK owns the single animation: the iframe's height eases to each new
- * measurement, while the hosted content just changes.
- */
-const HEIGHT_TRANSITION = 'height 250ms ease';
 
 export interface ZinIDFlow {
   /** Subscribe to an event. Identical in effect to the matching `onX` option. */
@@ -110,13 +96,15 @@ function createIframe(url: string, mode: ZinIDFlowMode): HTMLIFrameElement {
   iframe.setAttribute('allow', IFRAME_ALLOW);
   // TODO(hardening): add a `sandbox` attribute once the hosted page's exact
   // requirements are known — the wrong token set silently breaks camera access.
+  // Both modes are a fixed, viewport-bounded box. The hosted page scrolls its
+  // own content, so the SDK never changes these heights after mount.
   iframe.style.cssText =
     mode === 'modal'
-      ? // A fixed box: the modal ignores resize entirely, and overflow scrolls
-        // internally rather than growing the frame.
-        `width:100%;height:${MODAL_HEIGHT}px;max-height:100%;border:0;display:block;`
-      : `width:100%;height:${EMBED_INITIAL_HEIGHT}px;border:0;display:block;` +
-        `transition:${HEIGHT_TRANSITION};`;
+      ? `width:100%;height:${MODAL_HEIGHT}px;max-height:100%;border:0;display:block;`
+      : // Fill the vendor's container, but never collapse to zero when that
+        // container has no intrinsic height, and never exceed the viewport.
+        `width:100%;height:100%;min-height:min(${EMBED_MIN_HEIGHT}px,100vh);` +
+        `max-height:100vh;border:0;display:block;`;
   return iframe;
 }
 
@@ -200,15 +188,6 @@ export function createFlow(options: ZinIDFlowOptions): ZinIDFlow {
     }, CLOSE_CONFIRM_TIMEOUT_MS);
   }
 
-  /**
-   * Grow or shrink the embedded frame to the height the hosted page settled on,
-   * never below the floor. The CSS transition on the iframe animates it.
-   */
-  function applyResize(payload: ResizePayload): void {
-    if (!iframe) return;
-    iframe.style.height = `${Math.max(payload.height, SDK_MIN_HEIGHT)}px`;
-  }
-
   // Registered once, up front: the hosted page's cancel is what actually closes
   // a modal. Completion deliberately leaves the UI alone so the vendor can show
   // their own success state and dismiss it with close().
@@ -251,11 +230,7 @@ export function createFlow(options: ZinIDFlowOptions): ZinIDFlow {
       teardownUi();
       throw new Error('The verification iframe has no content window.');
     }
-    const channelOptions: ChannelOptions = { emitter, origin, peer, scope: window };
-    // Only embed owns a frame that may grow. Modal holds a fixed box, so it
-    // never subscribes and an unwanted resize is ignored at the source.
-    if (mode === 'embed') channelOptions.onResize = applyResize;
-    channel = new Channel(channelOptions);
+    channel = new Channel({ emitter, origin, peer, scope: window });
     channel.start();
   }
 

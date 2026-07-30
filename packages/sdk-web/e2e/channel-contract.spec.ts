@@ -158,11 +158,13 @@ test.describe('SDK ↔ hosted page wire contract', () => {
     await expect.poll(() => eventNames(page)).toContain('step_change');
   });
 
-  test('applies a settled resize to the embedded iframe', async ({ page }) => {
+  test('ignores a stale resize instead of resizing the frame', async ({ page }) => {
+    // The hosted page no longer broadcasts zinid:resize. A stale deploy still
+    // sending it must be a silent no-op rather than an error or a jumping frame.
     await setUp(page);
     await expect.poll(() => eventNames(page)).toContain('ready');
     const iframe = page.locator('#host iframe');
-    const before = await iframe.evaluate((el) => el.getBoundingClientRect().height);
+    const before = await iframe.evaluate((el) => Math.round(el.getBoundingClientRect().height));
 
     await hostedFrame(page).evaluate(() => {
       (window as never as { __send: (t: string, p?: unknown) => void }).__send('zinid:resize', {
@@ -170,30 +172,10 @@ test.describe('SDK ↔ hosted page wire contract', () => {
       });
     });
 
-    // The transition animates, so poll until it settles rather than sampling once.
-    await expect
-      .poll(() => iframe.evaluate((el) => Math.round(el.getBoundingClientRect().height)))
-      .toBe(900);
-    expect(before).not.toBe(900);
-  });
-
-  test('clamps a collapsing resize to the floor', async ({ page }) => {
-    await setUp(page);
-    await expect.poll(() => eventNames(page)).toContain('ready');
-
-    await hostedFrame(page).evaluate(() => {
-      (window as never as { __send: (t: string, p?: unknown) => void }).__send('zinid:resize', {
-        height: 10,
-      });
-    });
-
-    await expect
-      .poll(() =>
-        page
-          .locator('#host iframe')
-          .evaluate((el) => Math.round(el.getBoundingClientRect().height)),
-      )
-      .toBe(340);
+    await page.waitForTimeout(400);
+    const after = await iframe.evaluate((el) => Math.round(el.getBoundingClientRect().height));
+    expect(after).toBe(before);
+    expect(await eventNames(page)).not.toContain('error');
   });
 
   test('escape sends the close request under its namespaced type', async ({ page }) => {

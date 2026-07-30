@@ -1,12 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  CLOSE_CONFIRM_TIMEOUT_MS,
-  EMBED_INITIAL_HEIGHT,
-  MODAL_HEIGHT,
-  SDK_MIN_HEIGHT,
-  createFlow,
-} from './flow';
+import { CLOSE_CONFIRM_TIMEOUT_MS, EMBED_MIN_HEIGHT, MODAL_HEIGHT, createFlow } from './flow';
 import type { ZinIDFlow } from './flow';
 
 const URL_ = 'https://verify.zinid.com/s/abc123';
@@ -327,7 +321,7 @@ describe('createFlow', () => {
     });
   });
 
-  describe('embed resize contract', () => {
+  describe('embed frame sizing', () => {
     function mountEmbed() {
       const host = document.createElement('div');
       document.body.append(host);
@@ -336,80 +330,64 @@ describe('createFlow', () => {
       return { flow, host, iframe: findIframe(host) as HTMLIFrameElement };
     }
 
-    it('starts at a sensible height so the frame never renders empty', () => {
+    it('fills its container rather than taking an explicit pixel height', () => {
       const { iframe } = mountEmbed();
 
-      expect(iframe.style.height).toBe(`${EMBED_INITIAL_HEIGHT}px`);
+      expect(iframe.style.height).toBe('100%');
     });
 
-    it('carries a height transition so a new height animates rather than snaps', () => {
+    it('is bounded by the viewport', () => {
       const { iframe } = mountEmbed();
 
-      expect(iframe.style.transition).toMatch(/height/);
-      expect(iframe.style.transition).toMatch(/250ms/);
+      expect(iframe.style.maxHeight).toBe('100vh');
     });
 
-    it('grows the frame to a settled height', () => {
+    it('has a floor so it never flashes at zero height', () => {
+      // The vendor's container may have no intrinsic height, in which case a
+      // bare height:100% would collapse.
+      const { iframe } = mountEmbed();
+
+      // Spacing inside min() is normalised differently across engines.
+      expect(iframe.style.minHeight).toMatch(
+        new RegExp(`min\\(\\s*${EMBED_MIN_HEIGHT}px\\s*,\\s*100vh\\s*\\)`),
+      );
+    });
+
+    it('carries no height transition, since the height never changes', () => {
+      const { iframe } = mountEmbed();
+
+      expect(iframe.style.transition).toBe('');
+    });
+
+    it('ignores a stale zinid:resize instead of resizing to it', () => {
       const { iframe } = mountEmbed();
 
       deliverFrom(iframe, 'zinid:resize', { height: 900 });
 
-      expect(iframe.style.height).toBe('900px');
+      expect(iframe.style.height).toBe('100%');
     });
 
-    it('shrinks the frame to a smaller settled height', () => {
-      const { iframe } = mountEmbed();
-      deliverFrom(iframe, 'zinid:resize', { height: 900 });
+    it('surfaces no error for a stale zinid:resize', () => {
+      const onError = vi.fn();
+      const host = document.createElement('div');
+      document.body.append(host);
+      const flow = make({ url: URL_, onError });
+      flow.mount(host);
 
-      deliverFrom(iframe, 'zinid:resize', { height: 600 });
+      deliverFrom(findIframe(host) as HTMLIFrameElement, 'zinid:resize', { height: 900 });
 
-      expect(iframe.style.height).toBe('600px');
-    });
-
-    it('clamps a collapsing measurement to the floor', () => {
-      // Mirrors the hosted side's floor rather than trusting it: a momentary
-      // small measurement must not collapse the frame.
-      const { iframe } = mountEmbed();
-
-      deliverFrom(iframe, 'zinid:resize', { height: 12 });
-
-      expect(iframe.style.height).toBe(`${SDK_MIN_HEIGHT}px`);
-    });
-
-    it('clamps a zero height to the floor', () => {
-      const { iframe } = mountEmbed();
-
-      deliverFrom(iframe, 'zinid:resize', { height: 0 });
-
-      expect(iframe.style.height).toBe(`${SDK_MIN_HEIGHT}px`);
-    });
-
-    it('ignores a malformed height and leaves the frame as it was', () => {
-      const { iframe } = mountEmbed();
-
-      deliverFrom(iframe, 'zinid:resize', { height: 'tall' });
-
-      expect(iframe.style.height).toBe(`${EMBED_INITIAL_HEIGHT}px`);
-    });
-
-    it('stops applying heights once closed', () => {
-      const { flow, iframe } = mountEmbed();
-
-      flow.close();
-      deliverFrom(iframe, 'zinid:resize', { height: 900 });
-
-      expect(iframe.style.height).toBe(`${EMBED_INITIAL_HEIGHT}px`);
+      expect(onError).not.toHaveBeenCalled();
     });
   });
 
-  describe('modal ignores resize', () => {
+  describe('modal frame sizing', () => {
     it('holds a fixed box height', () => {
       make({ url: URL_, mode: 'modal' }).mount();
 
       expect((findIframe() as HTMLIFrameElement).style.height).toBe(`${MODAL_HEIGHT}px`);
     });
 
-    it('does not resize per message', () => {
+    it('does not resize for a stale resize message', () => {
       make({ url: URL_, mode: 'modal' }).mount();
       const iframe = findIframe() as HTMLIFrameElement;
 

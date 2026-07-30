@@ -70,10 +70,26 @@ test.describe('live hosted session', () => {
     page.on('pageerror', (error) => consoleErrors.push(`pageerror: ${error.message}`));
 
     // Only the vendor page is synthesised; the hosted URL goes to the network.
+    let sessionStatus: number | undefined;
+    page.on('response', (response) => {
+      if (sessionStatus === undefined && response.url().startsWith(url.split('?')[0] as string)) {
+        sessionStatus = response.status();
+      }
+    });
     await page.route(`${VENDOR_ORIGIN}/**`, (route) =>
       route.fulfill({ contentType: 'text/html', body: parentHtml(url) }),
     );
     await page.goto(`${VENDOR_ORIGIN}/`);
+
+    // An expired session serves an "expired link" screen and opens no channel,
+    // so it would look exactly like a broken handshake. Distinguish the two:
+    // this is a stale fixture, not a product failure.
+    await expect.poll(() => sessionStatus !== undefined, { timeout: 20_000 }).toBe(true);
+    test.skip(
+      sessionStatus !== 200,
+      `The session URL returned ${sessionStatus} (410 means expired). ` +
+        'Put a fresh one in VITE_SESSION_URL.',
+    );
 
     // 1. The SDK appended the params the hosted page needs to talk back at all.
     const src = await page.locator('#host iframe').getAttribute('src');
@@ -110,11 +126,16 @@ test.describe('live hosted session', () => {
     expect(readyCount, `saw ${readyCount} ready events: ${JSON.stringify(events)}`).toBe(1);
     expect(events.filter((event) => event.name === 'error')).toEqual([]);
 
-    // 5. The frame is sized: either still at the initial height or grown by a
-    //    real zinid:resize, but never collapsed.
+    // 5. The frame holds a stable, non-collapsed height. The SDK no longer
+    //    resizes per message, so this is whatever the fixed box resolved to.
     const height = await page
       .locator('#host iframe')
       .evaluate((el) => el.getBoundingClientRect().height);
-    expect(height).toBeGreaterThanOrEqual(340);
+    expect(height).toBeGreaterThan(0);
+    await page.waitForTimeout(500);
+    const settled = await page
+      .locator('#host iframe')
+      .evaluate((el) => el.getBoundingClientRect().height);
+    expect(settled).toBe(height);
   });
 });

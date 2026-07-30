@@ -314,13 +314,52 @@ E2E run used a synthetic `https://vendor.test` parent via route interception, wh
 accepted, but a real `http://localhost:<port>` origin has not been tried. If the handshake is
 silent when integrating, check that first.
 
-## Phase 6 — next
+## Phase 6 — Resize removed from the contract (complete, 2026-07-30)
+
+**The SDK ↔ hosted contract no longer includes `zinid:resize`.** The hosted flow moved to a fixed,
+viewport-bounded frame that scrolls its own content, so per-step height negotiation is obsolete.
+Phase 4's resize work is fully reverted.
+
+- `channel.ts`: the `zinid:resize` case, the `isResizePayload` guard and the `onResize` consumer are
+  gone, along with `ChannelOptions.onResize`. `ResizePayload` was cleanly unused and removed from
+  `types.ts`.
+- `flow.ts`: no more `applyResize`, `SDK_MIN_HEIGHT`, `EMBED_INITIAL_HEIGHT`, or the 250ms height
+  transition — the animation only existed to smooth resize-driven changes.
+- **Embed sizing is now static.** The iframe fills its container
+  (`height:100%; max-height:100vh`) with `min-height:min(EMBED_MIN_HEIGHT,100vh)` as a floor, so it
+  cannot collapse to zero when the vendor's container has no intrinsic height, and cannot overflow
+  a short viewport. `EMBED_MIN_HEIGHT` is 480. No height is ever set after mount.
+- **Modal is unchanged** — it already held a fixed `MODAL_HEIGHT` (520) box and never subscribed to
+  resize. Confirmed it references nothing resize-related.
+- `ready`, `step_change`, `complete`, `cancel` and `error` handling is untouched.
+- **A stale `zinid:resize` is a silent no-op.** It now falls through to `default`, so a hosted
+  deploy that still broadcasts it produces no `invalid_message` error in the vendor's console and
+  no frame movement. Covered by tests at both the channel and flow level, and in the E2E contract
+  spec.
+- Bundle shrank as expected: **2.73 kB → 2.62 kB gzipped** of 8 KB.
+- Unit tests: 220 passing. E2E: 9 passing. Mutation-verified — restoring a fixed pixel height fails
+  4 tests, and making resize emit an error instead of being ignored fails 2.
+
+### The live session token expired mid-phase
+
+`VITE_SESSION_URL` now returns **HTTP 410** and the hosted page renders "This link has expired",
+sending nothing at all. The live spec was failing with "no ready received", which is
+indistinguishable from a broken handshake. It now checks the session document's status first and
+**skips with a clear message** when it is not 200, so a stale fixture cannot masquerade as a
+product regression. Put a fresh URL in `.env` to re-enable it.
+
+Worth noting for the product, not the SDK: **an expired session is silent on the wire.** The hosted
+page shows its expired screen and opens no channel, so a vendor sees no `error` event — just a
+frame that never becomes ready. If that should surface to vendors, the hosted page needs to send
+`zinid:error` before giving up.
+
+## Phase 7 — next
 
 1. **Wire E2E into CI** with a `playwright install chromium` step. The contract spec needs no
    secrets; the live spec skips without `VITE_SESSION_URL` and should stay opt-in so CI never
    depends on a session token.
 2. **Focus trap** for the modal, required before GA.
 3. Decide the `sandbox` question against Didit's embed requirements.
-4. Exercise a **terminal outcome** against a live session — the passive run confirms the handshake
-   and resize, but `zinid:complete` and `zinid:cancel` have still only been seen from the double.
-   That needs a session someone actually completes.
+4. Exercise a **terminal outcome** against a live session — the passive run confirmed only the
+   handshake, and `zinid:complete` and `zinid:cancel` have still only been seen from the double.
+   That needs a fresh token and a session someone actually completes.

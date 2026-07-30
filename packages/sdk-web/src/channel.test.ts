@@ -356,7 +356,7 @@ describe('Channel', () => {
       expect(handler).toHaveBeenCalledTimes(1);
     });
 
-    const bare = ['ready', 'cancel', 'complete', 'step_change', 'error', 'resize'];
+    const bare = ['ready', 'cancel', 'complete', 'step_change', 'error'];
 
     it.each(bare)('ignores the unprefixed type %s', (wireType) => {
       const handler = vi.fn();
@@ -376,6 +376,18 @@ describe('Channel', () => {
       emitter.on('error', onError);
 
       deliver({ type: 'zinid:teleported', payload: { anything: true }, v: 1 });
+
+      expect(onError).not.toHaveBeenCalled();
+    });
+
+    it('ignores zinid:resize, which is no longer part of the contract', () => {
+      // The hosted page stopped broadcasting it once the flow moved to a fixed,
+      // viewport-bounded frame. A stale deploy still sending it must be a silent
+      // no-op, not an invalid_message error in the vendor's console.
+      const onError = vi.fn();
+      emitter.on('error', onError);
+
+      deliver({ type: 'zinid:resize', payload: { height: 900 }, v: 1 });
 
       expect(onError).not.toHaveBeenCalled();
     });
@@ -503,74 +515,6 @@ describe('Channel', () => {
       deliver({ type: 'zinid:ready', payload: null, v: 1 });
 
       expect(handler).toHaveBeenCalledTimes(2);
-    });
-  });
-
-  describe('resize', () => {
-    it('reports a settled height to the resize consumer', () => {
-      const onResize = vi.fn();
-      const resizing = new Channel({ emitter, origin: ORIGIN, peer, scope, onResize });
-      resizing.start();
-
-      scope.dispatch({
-        origin: ORIGIN,
-        source: peer,
-        data: { type: 'zinid:resize', payload: { height: 640 }, v: 1 },
-      });
-
-      expect(onResize).toHaveBeenCalledWith({ height: 640 });
-      resizing.destroy();
-    });
-
-    it('does not emit resize as a vendor-facing event', () => {
-      const onError = vi.fn();
-      emitter.on('error', onError);
-      channel.start();
-
-      deliver({ type: 'zinid:resize', payload: { height: 640 }, v: 1 });
-
-      // No consumer configured for this channel, so nothing happens at all.
-      expect(onError).not.toHaveBeenCalled();
-    });
-
-    it.each([
-      ['a missing payload', undefined],
-      ['a non-numeric height', { height: '640' }],
-      ['a NaN height', { height: Number.NaN }],
-      ['an infinite height', { height: Number.POSITIVE_INFINITY }],
-      ['no height at all', { width: 640 }],
-    ])('rejects %s as a malformed message', (_label, payload) => {
-      const onResize = vi.fn();
-      const onError = vi.fn();
-      emitter.on('error', onError);
-      const resizing = new Channel({ emitter, origin: ORIGIN, peer, scope, onResize });
-      resizing.start();
-
-      scope.dispatch({
-        origin: ORIGIN,
-        source: peer,
-        data: { type: 'zinid:resize', payload, v: 1 },
-      });
-
-      expect(onResize).not.toHaveBeenCalled();
-      expect(onError).toHaveBeenCalledTimes(1);
-      expect(onError.mock.calls[0]?.[0]).toMatchObject({ code: 'invalid_message' });
-      resizing.destroy();
-    });
-
-    it('applies the origin and source guards to resize too', () => {
-      const onResize = vi.fn();
-      const resizing = new Channel({ emitter, origin: ORIGIN, peer, scope, onResize });
-      resizing.start();
-
-      scope.dispatch({
-        origin: 'https://evil.example',
-        source: peer,
-        data: { type: 'zinid:resize', payload: { height: 640 }, v: 1 },
-      });
-
-      expect(onResize).not.toHaveBeenCalled();
-      resizing.destroy();
     });
   });
 
