@@ -380,6 +380,72 @@ describe('createFlow', () => {
     });
   });
 
+  describe('error hands control back without touching the UI', () => {
+    // zinid:error is a terminal signal, not an outcome. The SDK reports it and
+    // stops: it must not dismiss the iframe, tear down the modal, or render
+    // anything of its own. Whether to close, replace or keep the surface is the
+    // vendor's call, made from inside their handler.
+    const LOAD_FAILURE = { code: 'expired', message: 'This link is no longer valid.' };
+
+    it('leaves the embedded iframe in place', () => {
+      const host = document.createElement('div');
+      document.body.append(host);
+      const flow = make({ url: URL_ });
+      flow.mount(host);
+
+      deliverFrom(findIframe(host) as HTMLIFrameElement, 'zinid:error', LOAD_FAILURE);
+
+      expect(findIframe(host)).not.toBeNull();
+    });
+
+    it('leaves the modal overlay standing', () => {
+      const flow = make({ url: URL_, mode: 'modal' });
+      flow.mount();
+
+      deliverFrom(findIframe() as HTMLIFrameElement, 'zinid:error', LOAD_FAILURE);
+
+      expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+      expect(findIframe()).not.toBeNull();
+    });
+
+    it('keeps the body scroll lock, since the modal is still open', () => {
+      document.body.style.overflow = 'auto';
+      const flow = make({ url: URL_, mode: 'modal' });
+      flow.mount();
+
+      deliverFrom(findIframe() as HTMLIFrameElement, 'zinid:error', LOAD_FAILURE);
+
+      expect(document.body.style.overflow).toBe('hidden');
+    });
+
+    it('renders no message of its own', () => {
+      const host = document.createElement('div');
+      document.body.append(host);
+      const flow = make({ url: URL_ });
+      flow.mount(host);
+      const before = host.innerHTML;
+
+      deliverFrom(findIframe(host) as HTMLIFrameElement, 'zinid:error', LOAD_FAILURE);
+
+      expect(host.innerHTML).toBe(before);
+    });
+
+    it('leaves the instance usable, so the vendor can close() from the handler', () => {
+      const flow = make({
+        url: URL_,
+        mode: 'modal',
+        onError: () => flow.close(),
+      });
+      flow.mount();
+
+      deliverFrom(findIframe() as HTMLIFrameElement, 'zinid:error', LOAD_FAILURE);
+
+      // Dismissed because the vendor asked, not because the SDK decided.
+      expect(findIframe()).toBeNull();
+      expect(document.body.style.overflow).not.toBe('hidden');
+    });
+  });
+
   describe('modal frame sizing', () => {
     it('holds a fixed box height', () => {
       make({ url: URL_, mode: 'modal' }).mount();

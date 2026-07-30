@@ -81,14 +81,13 @@ test.describe('live hosted session', () => {
     );
     await page.goto(`${VENDOR_ORIGIN}/`);
 
-    // An expired session serves an "expired link" screen and opens no channel,
-    // so it would look exactly like a broken handshake. Distinguish the two:
-    // this is a stale fixture, not a product failure.
+    // An expired session is a valid fixture for the terminal-error path, but not
+    // for the handshake path. Route to whichever this token can actually test.
     await expect.poll(() => sessionStatus !== undefined, { timeout: 20_000 }).toBe(true);
     test.skip(
       sessionStatus !== 200,
-      `The session URL returned ${sessionStatus} (410 means expired). ` +
-        'Put a fresh one in VITE_SESSION_URL.',
+      `The session URL returned ${sessionStatus}; the handshake needs a live one. ` +
+        'Put a fresh URL in VITE_SESSION_URL.',
     );
 
     // 1. The SDK appended the params the hosted page needs to talk back at all.
@@ -137,5 +136,62 @@ test.describe('live hosted session', () => {
       .locator('#host iframe')
       .evaluate((el) => el.getBoundingClientRect().height);
     expect(settled).toBe(height);
+  });
+
+  test('surfaces a terminal load failure without touching the UI', async ({ page }) => {
+    // An expired token is a permanently stable fixture for this path: the hosted
+    // page's load-failure screen runs its own minimal channel and reports the
+    // reason rather than sitting silent.
+    const url = SESSION_URL as string;
+    let sessionStatus: number | undefined;
+    page.on('response', (response) => {
+      if (sessionStatus === undefined && response.url().startsWith(url.split('?')[0] as string)) {
+        sessionStatus = response.status();
+      }
+    });
+    await page.route(`${VENDOR_ORIGIN}/**`, (route) =>
+      route.fulfill({ contentType: 'text/html', body: parentHtml(url) }),
+    );
+    await page.goto(`${VENDOR_ORIGIN}/`);
+
+    await expect.poll(() => sessionStatus !== undefined, { timeout: 20_000 }).toBe(true);
+    test.skip(
+      sessionStatus === 200,
+      'This session is still live, so it cannot exercise the load-failure path.',
+    );
+
+    const errorPayload = await new Promise<{ code: string; message: string } | undefined>(
+      (resolve) => {
+        const deadline = Date.now() + 30_000;
+        const poll = async () => {
+          const found = await page.evaluate(
+            () =>
+              (window as never as { __events: { name: string; payload: unknown }[] }).__events.find(
+                (event) => event.name === 'error',
+              )?.payload,
+          );
+          if (found || Date.now() > deadline) resolve(found as never);
+          else setTimeout(() => void poll(), 250);
+        };
+        void poll();
+      },
+    );
+
+    expect(errorPayload, 'no zinid:error arrived from the load-failure page').toBeDefined();
+    expect(typeof errorPayload?.code).toBe('string');
+    expect(typeof errorPayload?.message).toBe('string');
+
+    // The whole point of the contract: reported, not acted on.
+    await expect(page.locator('#host iframe')).toHaveCount(1);
+
+    // And surfaced once, despite the failure page riding it alongside every ping.
+    await page.waitForTimeout(3000);
+    const errorCount = await page.evaluate(
+      () =>
+        (window as never as { __events: { name: string }[] }).__events.filter(
+          (event) => event.name === 'error',
+        ).length,
+    );
+    expect(errorCount).toBe(1);
   });
 });

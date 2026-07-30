@@ -123,6 +123,12 @@ export class Channel {
   /** Guards against the ready re-ping surfacing to the vendor more than once. */
   private readyEmitted = false;
 
+  /**
+   * Terminal error codes already surfaced. The load-failure page re-pings its
+   * error until acknowledged, and a terminal signal must reach the vendor once.
+   */
+  private terminalErrors = new Set<string>();
+
   private readonly listener = (event: MessageEvent): void => {
     this.handleMessage(event);
   };
@@ -144,6 +150,7 @@ export class Channel {
   start(): void {
     if (this.scope) return;
     this.readyEmitted = false;
+    this.terminalErrors.clear();
     // Resolved here rather than at construction so nothing touches a global
     // during a server render.
     this.scope = this.configuredScope ?? (globalThis as unknown as MessageScope);
@@ -220,6 +227,13 @@ export class Channel {
         return;
       case 'zinid:error':
         if (!isErrorPayload(payload)) return this.reject(data.type);
+        // A terminal failure: the session could not run to a verdict. The
+        // load-failure page rides this alongside every ready ping, so
+        // acknowledge to stop the re-ping and surface each code only once —
+        // a repeated ping must not become repeated onError calls.
+        this.post(ACK);
+        if (this.terminalErrors.has(payload.code)) return;
+        this.terminalErrors.add(payload.code);
         this.emitter.emit('error', payload);
         return;
       default:

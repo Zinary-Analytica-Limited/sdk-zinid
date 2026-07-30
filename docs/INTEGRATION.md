@@ -244,6 +244,17 @@ throws a clear error at `mount()` rather than hanging. `localhost` is fine.
 a staging site served over plain http on a real hostname will fail at the camera step, not at the
 handshake — so it looks like a ZinID problem when it is a TLS problem.
 
+**`onError` never changes the UI — that is your decision.** The SDK reports a terminal failure and
+hands control back: it does not dismiss the iframe, tear down the modal, or render a message of its
+own. If you want the surface gone, call `close()` (keeps the instance, so it can be remounted) or
+`destroy()` from inside your handler. If you would rather leave the hosted page's own error screen
+visible, do nothing.
+
+The codes for a terminal load failure are `expired`, `not_found`, `completed` and `unavailable`.
+**Branch on `code`, never on `message`** — the message is a generic string meant for humans, and it
+will change. The SDK adds its own codes for protocol problems: `invalid_message`,
+`unsupported_version` and `close_timeout`.
+
 **Outcomes arrive through `onComplete`, not `onError`.** A declined verification is a _successful_
 flow with `session.status === 'Declined'`. `onError` is for real failures, and `onCancel` means the
 user walked away.

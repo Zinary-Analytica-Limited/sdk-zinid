@@ -518,6 +518,95 @@ describe('Channel', () => {
     });
   });
 
+  describe('terminal error', () => {
+    beforeEach(() => {
+      channel.start();
+    });
+
+    const LOAD_FAILURE = { code: 'expired', message: 'This link is no longer valid.' };
+
+    it('surfaces the payload verbatim', () => {
+      const onError = vi.fn();
+      emitter.on('error', onError);
+
+      deliver({ type: 'zinid:error', payload: LOAD_FAILURE, v: 1 });
+
+      expect(onError).toHaveBeenCalledWith(LOAD_FAILURE);
+    });
+
+    it.each(['expired', 'not_found', 'completed', 'unavailable'])(
+      'passes the %s load-failure code through',
+      (code) => {
+        const onError = vi.fn();
+        emitter.on('error', onError);
+
+        deliver({ type: 'zinid:error', payload: { code, message: 'generic' }, v: 1 });
+
+        expect(onError.mock.calls[0]?.[0]).toMatchObject({ code });
+      },
+    );
+
+    it('acknowledges so the load-failure page stops re-pinging', () => {
+      deliver({ type: 'zinid:error', payload: LOAD_FAILURE, v: 1 });
+
+      expect(peer.postMessage).toHaveBeenCalledWith(
+        { type: 'zinid:ack', payload: null, v: 1 },
+        ORIGIN,
+      );
+    });
+
+    it('surfaces a re-pinged terminal error only once', () => {
+      // The load-failure page rides its error alongside every ready ping, so a
+      // burst before the ack lands must not become a burst of onError calls.
+      const onError = vi.fn();
+      emitter.on('error', onError);
+
+      deliver({ type: 'zinid:error', payload: LOAD_FAILURE, v: 1 });
+      deliver({ type: 'zinid:error', payload: LOAD_FAILURE, v: 1 });
+      deliver({ type: 'zinid:error', payload: LOAD_FAILURE, v: 1 });
+
+      expect(onError).toHaveBeenCalledTimes(1);
+    });
+
+    it('still surfaces a genuinely different error code', () => {
+      const onError = vi.fn();
+      emitter.on('error', onError);
+
+      deliver({ type: 'zinid:error', payload: LOAD_FAILURE, v: 1 });
+      deliver({ type: 'zinid:error', payload: { code: 'unavailable', message: 'x' }, v: 1 });
+
+      expect(onError).toHaveBeenCalledTimes(2);
+    });
+
+    it('surfaces the same code again after a restart', () => {
+      const onError = vi.fn();
+      emitter.on('error', onError);
+      deliver({ type: 'zinid:error', payload: LOAD_FAILURE, v: 1 });
+      channel.destroy();
+      channel.start();
+
+      deliver({ type: 'zinid:error', payload: LOAD_FAILURE, v: 1 });
+
+      expect(onError).toHaveBeenCalledTimes(2);
+    });
+
+    it('arrives alongside ready without either suppressing the other', () => {
+      // The load-failure page runs a minimal channel that sends both.
+      const onReady = vi.fn();
+      const onError = vi.fn();
+      emitter.on('ready', onReady);
+      emitter.on('error', onError);
+
+      deliver({ type: 'zinid:ready', payload: null, v: 1 });
+      deliver({ type: 'zinid:error', payload: LOAD_FAILURE, v: 1 });
+      deliver({ type: 'zinid:ready', payload: null, v: 1 });
+      deliver({ type: 'zinid:error', payload: LOAD_FAILURE, v: 1 });
+
+      expect(onReady).toHaveBeenCalledTimes(1);
+      expect(onError).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('event translation', () => {
     beforeEach(() => {
       channel.start();

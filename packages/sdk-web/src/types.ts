@@ -40,7 +40,28 @@ export type StepChangePayload = {
   total: number;
 };
 
-/** Emitted when the flow fails. */
+/**
+ * Emitted when the session could not run to a verdict.
+ *
+ * This is the failure channel, not an outcome: every real verdict — Approved,
+ * Declined and Pending alike — arrives on `complete`. A declined verification is
+ * a successful flow, not an error.
+ *
+ * Receiving this does not change the UI. The SDK reports and hands back control;
+ * whether to dismiss, replace or keep the surface is the vendor's decision, made
+ * from inside the handler using `close()` or `destroy()`.
+ *
+ * `code` is deliberately a plain string rather than a union, so a new code from
+ * the hosted page is not a type error that forces an SDK release. Branch on
+ * `code`, never on `message`, which is a generic non-leaky string.
+ *
+ * From the hosted page, on a terminal load failure:
+ * `expired` | `not_found` | `completed` | `unavailable`.
+ *
+ * From the SDK itself: `invalid_message` (a message that is ours but malformed),
+ * `unsupported_version` (an envelope version this SDK cannot read), and
+ * `close_timeout` (the flow never confirmed a close request).
+ */
 export type ErrorPayload = {
   code: string;
   message: string;

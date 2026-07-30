@@ -348,12 +348,64 @@ indistinguishable from a broken handshake. It now checks the session document's 
 **skips with a clear message** when it is not 200, so a stale fixture cannot masquerade as a
 product regression. Put a fresh URL in `.env` to re-enable it.
 
-Worth noting for the product, not the SDK: **an expired session is silent on the wire.** The hosted
-page shows its expired screen and opens no channel, so a vendor sees no `error` event — just a
-frame that never becomes ready. If that should surface to vendors, the hosted page needs to send
-`zinid:error` before giving up.
+~~Worth noting for the product: an expired session is silent on the wire.~~ **No longer true** — see
+Phase 7. The hosted page now runs a minimal channel on its load-failure screen and reports the
+reason. The observation held only against the deploy of 2026-07-30.
 
-## Phase 7 — next
+## Phase 7 — The `zinid:error` contract (complete, 2026-07-30)
+
+`zinid:error` is the **failure channel**, not an outcome: every real verdict (Approved, Declined,
+Pending) arrives on `complete`. It means the session could not run to a verdict at all.
+
+### The SDK reports and hands back control — it never touches the UI
+
+On `zinid:error` the SDK fires the vendor's handler and **stops**. It does not dismiss the iframe,
+tear down the modal, drop the body scroll lock, or render anything of its own. Whether to close,
+replace or keep the surface is the vendor's decision, made from inside their handler with `close()`
+or `destroy()` — tools the SDK offers, never actions it takes.
+
+The implementation already behaved this way (only `cancel` triggers teardown), but nothing asserted
+it, so a future change could have broken it silently. Now covered by five tests, and
+mutation-verified: making `error` tear down the UI fails 4 of them.
+
+### Terminal errors are surfaced once
+
+The load-failure page rides `zinid:error` alongside every `zinid:ready` ping, re-pinging until the
+SDK acks. The channel now acknowledges on `zinid:error` as well as on `ready`, and deduplicates by
+`code`, so a burst before the ack lands cannot become a burst of `onError` calls. Deduping is per
+code, not blanket, so a genuinely different failure still gets through; the set clears on restart.
+Mutation-verified — removing the dedupe fails 2 tests.
+
+### Codes
+
+Terminal load failures: `expired` | `not_found` | `completed` | `unavailable`. SDK-generated:
+`invalid_message`, `unsupported_version`, `close_timeout`. `ErrorPayload.code` stays a plain
+`string` rather than a union **on purpose** — narrowing it would make any new hosted code a
+compile error for vendors and force an SDK release. Branch on `code`, never on `message`, which is
+a generic non-leaky string.
+
+A mid-flow Didit session expiry is _not_ an error — it is a flow outcome and arrives on the verdict
+path.
+
+### Verified against real staging
+
+With the hosted changes deployed, the expired token in `.env` produced, verbatim:
+
+```
+{"type":"zinid:ready","payload":null,"v":1}
+{"type":"zinid:error","payload":{"code":"expired","message":"This verification session has expired."},"v":1}
+```
+
+`onError` fired exactly once with `code: 'expired'`, and the iframe was still present afterwards.
+
+`e2e/live-session.spec.ts` now has two tests that route on the session document's HTTP status: a
+live session (200) exercises the handshake, an expired one (410) exercises the terminal-error path.
+**An expired token is a permanently stable fixture**, so the current `.env` keeps earning its keep
+rather than merely going stale.
+
+- Unit tests: 235 passing. E2E: 9 contract + 1 live error path, 1 skipped (needs a live token).
+
+## Phase 8 — next
 
 1. **Wire E2E into CI** with a `playwright install chromium` step. The contract spec needs no
    secrets; the live spec skips without `VITE_SESSION_URL` and should stay opt-in so CI never
