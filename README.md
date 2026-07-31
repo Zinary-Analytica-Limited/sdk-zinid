@@ -1,6 +1,6 @@
 # zinid-sdk
 
-Vendor-facing JavaScript SDK for [ZinID](https://zinid.com) hosted verification flows.
+Vendor-facing JavaScript SDK for [ZinID](https://zinid.africa) hosted verification flows.
 
 - `packages/sdk-web` — `@zinid/sdk-web`, the browser SDK (embed / modal / redirect modes),
   distributed via npm and CDN.
