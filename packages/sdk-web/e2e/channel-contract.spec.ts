@@ -249,6 +249,46 @@ test.describe('SDK ↔ hosted page wire contract', () => {
       .toContain('zinid:ack');
   });
 
+  // jsdom does no layout, so the unit tests can only assert the CSS string.
+  // These measure what the box actually resolves to in a real engine.
+  test.describe('modal box sizing', () => {
+    const modalParent = () => PARENT_HTML.replace("mode: 'embed'", "mode: 'modal'");
+
+    test('uses its full height when the viewport is tall enough', async ({ page }) => {
+      await page.setViewportSize({ width: 1280, height: 1000 });
+      await setUp(page, modalParent());
+      await expect.poll(() => eventNames(page)).toContain('ready');
+
+      const height = await page
+        .locator('iframe')
+        .evaluate((el) => Math.round(el.getBoundingClientRect().height));
+      expect(height).toBe(720);
+    });
+
+    test('falls back to 95vh on a viewport shorter than its full height', async ({ page }) => {
+      await page.setViewportSize({ width: 1280, height: 600 });
+      await setUp(page, modalParent());
+      await expect.poll(() => eventNames(page)).toContain('ready');
+
+      const height = await page
+        .locator('iframe')
+        .evaluate((el) => Math.round(el.getBoundingClientRect().height));
+      expect(height).toBe(570); // 95% of 600
+    });
+
+    test('never overflows a very short viewport', async ({ page }) => {
+      await page.setViewportSize({ width: 1280, height: 420 });
+      await setUp(page, modalParent());
+      await expect.poll(() => eventNames(page)).toContain('ready');
+
+      const height = await page
+        .locator('iframe')
+        .evaluate((el) => Math.round(el.getBoundingClientRect().height));
+      expect(height).toBe(399); // 95% of 420
+      expect(height).toBeLessThan(420);
+    });
+  });
+
   test('ignores a message from a foreign origin', async ({ page }) => {
     await setUp(page);
     await expect.poll(() => eventNames(page)).toContain('ready');

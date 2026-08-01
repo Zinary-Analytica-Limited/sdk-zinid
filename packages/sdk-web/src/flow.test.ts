@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CLOSE_CONFIRM_TIMEOUT_MS, EMBED_MIN_HEIGHT, MODAL_HEIGHT, createFlow } from './flow';
+import {
+  CLOSE_CONFIRM_TIMEOUT_MS,
+  EMBED_MIN_HEIGHT,
+  MODAL_HEIGHT,
+  MODAL_VIEWPORT_CAP,
+  createFlow,
+} from './flow';
 import type { ZinIDFlow } from './flow';
 
 const URL_ = 'https://verify.zinid.com/s/abc123';
@@ -446,11 +452,110 @@ describe('createFlow', () => {
     });
   });
 
+  describe('the vendor onError callback fires in both hosted scenarios', () => {
+    const CODES = ['expired', 'not_found', 'completed', 'unavailable'];
+
+    function mountEmbedWith(onError: (payload: { code: string; message: string }) => void) {
+      const host = document.createElement('div');
+      document.body.append(host);
+      const flow = make({ url: URL_, onError });
+      flow.mount(host);
+      return { flow, host, iframe: findIframe(host) as HTMLIFrameElement };
+    }
+
+    it.each(CODES)('load-time %s reaches the options handler', (code) => {
+      const onError = vi.fn();
+      const { iframe } = mountEmbedWith(onError);
+
+      // The failure page rides its error alongside ready; the flow never mounts.
+      deliverFrom(iframe, 'zinid:ready');
+      deliverFrom(iframe, 'zinid:error', { code, message: 'generic' });
+
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(onError).toHaveBeenCalledWith({ code, message: 'generic' });
+    });
+
+    it.each(CODES)('mid-flow %s reaches the options handler', (code) => {
+      const onError = vi.fn();
+      const { iframe } = mountEmbedWith(onError);
+
+      // A live session that then hits a terminal status on a step submission.
+      deliverFrom(iframe, 'zinid:ready');
+      deliverFrom(iframe, 'zinid:step_change', { step: 'document', index: 1, total: 3 });
+      deliverFrom(iframe, 'zinid:error', { code, message: 'generic' });
+
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(onError).toHaveBeenCalledWith({ code, message: 'generic' });
+    });
+
+    it('mid-flow error reaches a .on() subscriber too', () => {
+      const subscribed = vi.fn();
+      const host = document.createElement('div');
+      document.body.append(host);
+      const flow = make({ url: URL_ });
+      flow.on('error', subscribed);
+      flow.mount(host);
+      const iframe = findIframe(host) as HTMLIFrameElement;
+
+      deliverFrom(iframe, 'zinid:ready');
+      deliverFrom(iframe, 'zinid:error', { code: 'completed', message: 'generic' });
+
+      expect(subscribed).toHaveBeenCalledTimes(1);
+    });
+
+    it('mid-flow error reaches both the options handler and .on() without shadowing', () => {
+      const sugar = vi.fn();
+      const subscribed = vi.fn();
+      const host = document.createElement('div');
+      document.body.append(host);
+      const flow = make({ url: URL_, onError: sugar });
+      flow.on('error', subscribed);
+      flow.mount(host);
+      const iframe = findIframe(host) as HTMLIFrameElement;
+
+      deliverFrom(iframe, 'zinid:ready');
+      deliverFrom(iframe, 'zinid:error', { code: 'expired', message: 'generic' });
+
+      expect(sugar).toHaveBeenCalledTimes(1);
+      expect(subscribed).toHaveBeenCalledTimes(1);
+    });
+
+    it('fires in modal mode mid-flow, with the overlay still standing', () => {
+      const onError = vi.fn();
+      const flow = make({ url: URL_, mode: 'modal', onError });
+      flow.mount();
+      const iframe = findIframe() as HTMLIFrameElement;
+
+      deliverFrom(iframe, 'zinid:ready');
+      deliverFrom(iframe, 'zinid:step_change', { step: 'selfie', index: 2, total: 3 });
+      deliverFrom(iframe, 'zinid:error', { code: 'unavailable', message: 'generic' });
+
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    });
+
+    it('carries the code, so the vendor can branch on it rather than on message', () => {
+      const seen: string[] = [];
+      const { iframe } = mountEmbedWith(({ code }) => seen.push(code));
+
+      deliverFrom(iframe, 'zinid:ready');
+      deliverFrom(iframe, 'zinid:error', { code: 'not_found', message: 'anything at all' });
+
+      expect(seen).toEqual(['not_found']);
+    });
+  });
+
   describe('modal frame sizing', () => {
     it('holds a fixed box height', () => {
       make({ url: URL_, mode: 'modal' }).mount();
 
       expect((findIframe() as HTMLIFrameElement).style.height).toBe(`${MODAL_HEIGHT}px`);
+    });
+
+    it('caps the box to the viewport so a short screen is never filled edge to edge', () => {
+      make({ url: URL_, mode: 'modal' }).mount();
+
+      expect((findIframe() as HTMLIFrameElement).style.maxHeight).toBe(MODAL_VIEWPORT_CAP);
     });
 
     it('does not resize for a stale resize message', () => {

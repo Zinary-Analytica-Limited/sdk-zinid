@@ -37,8 +37,14 @@ const IFRAME_TITLE = 'Identity verification';
  */
 export const EMBED_MIN_HEIGHT = 480;
 
-/** Modal holds a stable box. */
-export const MODAL_HEIGHT = 520;
+/**
+ * The modal's tallest box. On a viewport too short for it, the frame falls back
+ * to `MODAL_VIEWPORT_CAP` so it never fills the screen edge to edge.
+ */
+export const MODAL_HEIGHT = 720;
+
+/** Ceiling on a short viewport, leaving the overlay visible around the frame. */
+export const MODAL_VIEWPORT_CAP = '95vh';
 
 export interface ZinIDFlow {
   /** Subscribe to an event. Identical in effect to the matching `onX` option. */
@@ -100,7 +106,10 @@ function createIframe(url: string, mode: ZinIDFlowMode): HTMLIFrameElement {
   // own content, so the SDK never changes these heights after mount.
   iframe.style.cssText =
     mode === 'modal'
-      ? `width:100%;height:${MODAL_HEIGHT}px;max-height:100%;border:0;display:block;`
+      ? // 720px is the ceiling, not a fixed size: a viewport shorter than that
+        // clamps to 95vh rather than overflowing or filling the screen entirely.
+        `width:100%;height:${MODAL_HEIGHT}px;max-height:${MODAL_VIEWPORT_CAP};` +
+        `border:0;display:block;`
       : // Fill the vendor's container, but never collapse to zero when that
         // container has no intrinsic height, and never exceed the viewport.
         `width:100%;height:100%;min-height:min(${EMBED_MIN_HEIGHT}px,100vh);` +

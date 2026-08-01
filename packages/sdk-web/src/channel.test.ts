@@ -607,6 +607,89 @@ describe('Channel', () => {
     });
   });
 
+  describe('terminal error fires in both hosted scenarios', () => {
+    beforeEach(() => {
+      channel.start();
+    });
+
+    // The hosted page emits zinid:error in two situations, and shows a terminal
+    // screen in both, so the flow never proceeds either way. What matters is
+    // that the vendor's handler fires in both.
+    const CODES = ['expired', 'not_found', 'completed', 'unavailable'];
+
+    describe('load-time: the session could not be resolved and the flow never mounted', () => {
+      it.each(CODES)('fires for %s when the failure page rides it alongside ready', (code) => {
+        const onError = vi.fn();
+        emitter.on('error', onError);
+
+        deliver({ type: 'zinid:ready', payload: null, v: 1 });
+        deliver({ type: 'zinid:error', payload: { code, message: 'generic' }, v: 1 });
+
+        expect(onError).toHaveBeenCalledTimes(1);
+        expect(onError.mock.calls[0]?.[0]).toEqual({ code, message: 'generic' });
+      });
+
+      it('fires even if the error arrives before any ready', () => {
+        const onError = vi.fn();
+        emitter.on('error', onError);
+
+        deliver({ type: 'zinid:error', payload: { code: 'expired', message: 'g' }, v: 1 });
+
+        expect(onError).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    describe('mid-flow: a step submission returned a terminal status', () => {
+      it.each(CODES)('fires for %s once the flow is already underway', (code) => {
+        const onError = vi.fn();
+        emitter.on('error', onError);
+
+        // A live, healthy session: ready acknowledged, steps progressing.
+        deliver({ type: 'zinid:ready', payload: null, v: 1 });
+        deliver({
+          type: 'zinid:step_change',
+          payload: { step: 'document', index: 1, total: 3 },
+          v: 1,
+        });
+        deliver({
+          type: 'zinid:step_change',
+          payload: { step: 'selfie', index: 2, total: 3 },
+          v: 1,
+        });
+
+        deliver({ type: 'zinid:error', payload: { code, message: 'generic' }, v: 1 });
+
+        expect(onError).toHaveBeenCalledTimes(1);
+        expect(onError.mock.calls[0]?.[0]).toEqual({ code, message: 'generic' });
+      });
+
+      it('fires after a long-running session with many steps', () => {
+        const onError = vi.fn();
+        emitter.on('error', onError);
+        deliver({ type: 'zinid:ready', payload: null, v: 1 });
+        for (let index = 0; index < 12; index += 1) {
+          deliver({ type: 'zinid:step_change', payload: { step: 's', index, total: 12 }, v: 1 });
+        }
+
+        deliver({ type: 'zinid:error', payload: { code: 'completed', message: 'g' }, v: 1 });
+
+        expect(onError).toHaveBeenCalledTimes(1);
+      });
+
+      it('is not suppressed by the ack sent for the earlier ready', () => {
+        const onError = vi.fn();
+        emitter.on('error', onError);
+        deliver({ type: 'zinid:ready', payload: null, v: 1 });
+        peer.postMessage.mockClear();
+
+        deliver({ type: 'zinid:error', payload: { code: 'not_found', message: 'g' }, v: 1 });
+
+        expect(onError).toHaveBeenCalledTimes(1);
+        expect(peer.postMessage).toHaveBeenCalledTimes(1);
+      });
+    });
+  });
+
   describe('event translation', () => {
     beforeEach(() => {
       channel.start();

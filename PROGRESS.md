@@ -329,7 +329,7 @@ Phase 4's resize work is fully reverted.
   (`height:100%; max-height:100vh`) with `min-height:min(EMBED_MIN_HEIGHT,100vh)` as a floor, so it
   cannot collapse to zero when the vendor's container has no intrinsic height, and cannot overflow
   a short viewport. `EMBED_MIN_HEIGHT` is 480. No height is ever set after mount.
-- **Modal is unchanged** — it already held a fixed `MODAL_HEIGHT` (520) box and never subscribed to
+- **Modal is unchanged** — it already held a fixed `MODAL_HEIGHT` box and never subscribed to
   resize. Confirmed it references nothing resize-related.
 - `ready`, `step_change`, `complete`, `cancel` and `error` handling is untouched.
 - **A stale `zinid:resize` is a silent no-op.** It now falls through to `default`, so a hosted
@@ -404,6 +404,17 @@ live session (200) exercises the handshake, an expired one (410) exercises the t
 rather than merely going stale.
 
 - Unit tests: 235 passing. E2E: 9 contract + 1 live error path, 1 skipped (needs a live token).
+
+## Modal box sizing (2026-08-01)
+
+`MODAL_HEIGHT` is now **720 and acts as a ceiling, not a fixed size**: the frame carries
+`max-height: MODAL_VIEWPORT_CAP` (95vh), so a viewport shorter than 720 clamps to 95vh rather than
+overflowing or filling the screen edge to edge.
+
+jsdom performs no layout, so the unit test can only assert the CSS string. Three E2E tests measure
+what the box actually resolves to in Chromium: 1000px viewport renders 720px, 600px renders 570px,
+420px renders 399px. Mutation-verified — reverting the cap to `100%` fails the two clamping tests
+while the tall-viewport one correctly still passes.
 
 ## Phase 8 — next
 
