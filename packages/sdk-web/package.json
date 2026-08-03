@@ -1,7 +1,30 @@
 {
   "name": "@zinid/sdk-web",
-  "version": "0.0.0",
-  "description": "ZinID web SDK — embed, modal, and redirect verification flows for vendor sites.",
+  "version": "0.1.0",
+  "description": "Embed ZinID hosted identity verification in your web app — inline, modal, or redirect. Zero dependencies, TypeScript types included.",
+  "keywords": [
+    "zinid",
+    "identity",
+    "identity-verification",
+    "kyc",
+    "verification",
+    "onboarding",
+    "aml",
+    "sdk",
+    "iframe",
+    "embed",
+    "browser"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/Zinary-Analytica-Limited/sdk-zinid#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zinary-Analytica-Limited/sdk-zinid.git",
+    "directory": "packages/sdk-web"
+  },
+  "bugs": {
+    "url": "https://github.com/Zinary-Analytica-Limited/sdk-zinid/issues"
+  },
   "type": "module",
   "sideEffects": false,
   "main": "./dist/zinid.cjs",
@@ -27,7 +50,8 @@
     "size": "pnpm run build && size-limit",
     "test:e2e": "pnpm run build && playwright test",
     "dev": "tsup --watch",
-    "prepack": "pnpm run build"
+    "prepack": "pnpm run build",
+    "prepublishOnly": "pnpm -w run lint && pnpm run typecheck && pnpm run test"
   },
   "size-limit": [
     {

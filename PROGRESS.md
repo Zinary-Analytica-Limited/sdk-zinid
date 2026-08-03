@@ -448,6 +448,41 @@ The practical consequence is a vendor-integration risk, not an SDK bug: if the i
 own `Permissions-Policy` header omits camera for the ZinID iframe origin, **every** user hits the
 camera-blocked screen. Documented in the npm README as an integration requirement.
 
+## npm README and publish readiness (2026-08-01)
+
+### README
+
+`packages/sdk-web/README.md` is the npmjs.com page — self-contained, no repo context assumed.
+Install and CDN usage, a four-line vanilla quick start, minimal React and Svelte starters, the SSR
+note, the three modes, the full event API, and the `Permissions-Policy` requirement. **Every
+snippet was type-checked against the real API** under `--strict --exactOptionalPropertyTypes`, so
+the published page cannot document a signature that does not exist.
+
+The Permissions-Policy section is framed as a normal embed requirement rather than a caveat,
+because a vendor whose own page policy omits camera will send **every** user to the camera-blocked
+screen, and the SDK cannot detect or report it (see the delegation limitation above).
+
+### Publish-ready — not published
+
+- `version` 0.1.0; `description`, `keywords`, `license` (MIT), `homepage`, `repository` (with
+  `directory` for the monorepo) and `bugs` all set.
+- `publishConfig.access: "public"` so the scoped package always publishes public — required for
+  free-org publishing and for jsDelivr/unpkg to serve it.
+- `main` (CJS), `module` (ESM), `types`, the `exports` map and `unpkg`/`jsdelivr` all verified
+  against the real built filenames.
+- `prepublishOnly` runs lint → typecheck → build → tests → size budget. **Verified it both passes
+  and blocks**: temporarily setting the budget to 1 KB made it exit non-zero, so an oversized
+  bundle cannot be published.
+- `npm pack --dry-run`: **11 files, 41.5 kB packed / 151 kB unpacked.** All four build outputs plus
+  `README.md`, `LICENSE` and `package.json`. No source, tests, configs or `.env` — confirmed by
+  scoping the check to the tarball listing rather than the whole command output, which also
+  contains the prepack build log.
+
+**MIT was chosen as the license and a LICENSE file added, since neither existed.** That is a legal
+decision, not a technical one — confirm before publishing.
+
+`npm publish` has **not** been run.
+
 ## Phase 8 — next
 
 1. **Wire E2E into CI** with a `playwright install chromium` step. The contract spec needs no
