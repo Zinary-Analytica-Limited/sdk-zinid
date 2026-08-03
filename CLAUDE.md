@@ -69,6 +69,22 @@ A future `packages/react` and shared `examples/` fit alongside without restructu
 - **Commit after every phase. Never push** — pushing is always the user's own action.
 - **PROGRESS.md**: read it at the start of every session; update it at the end of every session.
 
+## Security rules
+
+- **Never commit secrets.** `eslint-plugin-no-secrets` enforces this in two places:
+  - the **pre-commit** hook — husky runs `lint-staged`, which runs ESLint over staged JS/TS, so a
+    staged high-entropy string fails the commit;
+  - **CI** — the `Lint and secret scan` step runs the same `eslint .` on every push and PR.
+- **Do not bypass with `--no-verify`.** The hook is skippable by design; CI is not, so a bypassed
+  commit fails the build instead. Bypassing only defers the failure.
+- **The SDK holds no secrets by design.** It is a session-token model: the vendor's backend mints a
+  session URL and that URL is the only credential the browser ever sees. **If a secret ever seems
+  necessary in SDK source, stop — it belongs on the backend.**
+- **Coverage limit worth knowing:** ESLint only lints `.ts` and `.mjs` here, so a secret pasted into
+  Markdown, JSON or YAML is _not_ caught by either gate. Enabling GitHub's native secret scanning
+  (a repository setting, not configurable from this repo) would close that gap.
+- `.env` is gitignored and holds a real session URL. Never move it into a tracked file.
+
 ## Commands
 
 All from repo root:

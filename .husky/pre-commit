@@ -1,0 +1,4 @@
+# Runs ESLint over staged JS/TS, which includes eslint-plugin-no-secrets.
+# A staged file containing a high-entropy secret fails the commit.
+# Bypassable with --no-verify, so CI re-runs the same lint as a backstop.
+pnpm exec lint-staged

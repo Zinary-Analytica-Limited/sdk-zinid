@@ -483,6 +483,44 @@ decision, not a technical one — confirm before publishing.
 
 `npm publish` has **not** been run.
 
+## Secret scanning enforcement (2026-08-01)
+
+`eslint-plugin-no-secrets` was already installed and configured (`tolerance: 4.5`). This session
+built the enforcement around it.
+
+**There was no pre-commit gate at all.** No husky, no lint-staged, no git hooks — `core.hooksPath`
+was unset and `.git/hooks` held only samples. Nothing had ever gated a commit in this repo, so the
+rule was configured but unreachable. Added husky + lint-staged at the root:
+
+- `.husky/pre-commit` runs `pnpm exec lint-staged`.
+- lint-staged runs `eslint --max-warnings=0 --no-warn-ignored` over staged JS/TS (this is what
+  carries the no-secrets rule) and `prettier --write` over the wider set.
+- ESLint runs **without `--fix`**, so nothing can silently rewrite a flagged line.
+
+**Verified the gate is real, not just configured.** Staged a file containing a fabricated
+high-entropy string and ran a genuine `git commit`: it was rejected with
+`Found a string with entropy 5`, `HEAD` did not move, and lint-staged reverted cleanly. The probe
+file was then removed.
+
+**No false positives to tune.** A full `eslint .` sweep reported zero no-secrets hits across **16
+files (15 `.ts`, 1 `.mjs`)** — verified the sweep was real by counting the files linted rather than
+trusting a silent pass. The mock session data in the tests (`sess_123`, `sess_e2e`, a
+zero-padded UUID) is all below the entropy threshold, so **no inline disables were needed and none
+were added**. Nothing was blanket-disabled and the tolerance was not raised.
+
+Also confirmed the live session token in the gitignored `.env` appears in **no tracked file**.
+
+**CI backstop:** the existing `pnpm lint` step already runs `eslint .` including the rule, so it was
+renamed to `Lint and secret scan` with a comment rather than adding a redundant second ESLint pass.
+The pre-commit hook is bypassable with `--no-verify`; CI is not.
+
+### Known gap
+
+ESLint lints only `.ts` and `.mjs` here. Tracked files also include `.md`, `.json`, `.yaml`, `.yml`
+and `.example` — **a secret pasted into any of those is caught by neither gate.** GitHub's native
+secret scanning would close this, but it is a repository setting that cannot be enabled from code.
+**Enable it manually in repo settings.**
+
 ## Phase 8 — next
 
 1. **Wire E2E into CI** with a `playwright install chromium` step. The contract spec needs no

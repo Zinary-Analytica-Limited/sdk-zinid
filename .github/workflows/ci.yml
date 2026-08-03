@@ -25,7 +25,10 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      - name: Lint
+      # Also the secret-scanning backstop: `pnpm lint` runs `eslint .`, which
+      # includes eslint-plugin-no-secrets. The pre-commit hook enforcing the
+      # same rule is bypassable with `--no-verify`; this is not.
+      - name: Lint and secret scan
         run: pnpm lint
 
       - name: Typecheck

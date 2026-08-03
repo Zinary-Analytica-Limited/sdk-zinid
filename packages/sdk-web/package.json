@@ -64,7 +64,6 @@
     "access": "public"
   },
   "//": "Zero runtime dependencies — the SDK uses only browser APIs. Keep `dependencies` empty.",
-  "dependencies": {},
   "devDependencies": {
     "@playwright/test": "^1.62.0",
     "@size-limit/file": "^13.0.1",
