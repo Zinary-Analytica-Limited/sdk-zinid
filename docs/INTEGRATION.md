@@ -1,7 +1,7 @@
 # Integrating `@zinid/sdk-web` locally
 
-How to consume this SDK from another repo before it is published, and how to wire it into a React
-app.
+How to consume this SDK from another repo before it is published, and how to wire it into a
+React, Vue or Angular app.
 
 ## 1. Get the SDK into your app
 
@@ -16,10 +16,10 @@ production.
 ```sh
 # in this repo
 cd packages/sdk-web
-pnpm pack                      # runs the build first, emits zinid-sdk-web-0.0.0.tgz
+pnpm pack                      # runs the build first, emits zinid-sdk-web-0.1.0.tgz
 
-# in your React repo
-pnpm add /absolute/path/to/sdk-zinid/packages/sdk-web/zinid-sdk-web-0.0.0.tgz
+# in your app's repo
+pnpm add /absolute/path/to/sdk-zinid/packages/sdk-web/zinid-sdk-web-0.1.0.tgz
 ```
 
 Re-run `pnpm pack` and re-install after each SDK change. Deliberate and explicit — good for
@@ -224,6 +224,132 @@ export function VerifyModalButton({ sessionUrl }: { sessionUrl: string }) {
   return <button onClick={open}>Verify my identity</button>;
 }
 ```
+
+## 3b. Vue integration
+
+Same shape as React: create the flow when the element exists, destroy it on teardown, and keep the
+flow out of reactive state — it is a long-lived object with its own lifecycle, and making it a
+`ref` gains nothing but proxy overhead.
+
+```vue
+<script setup lang="ts">
+import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { createFlow } from '@zinid/sdk-web';
+import type { CompletePayload, ErrorPayload, ZinIDFlow, ZinIDFlowMode } from '@zinid/sdk-web';
+
+const props = withDefaults(defineProps<{ sessionUrl: string; mode?: ZinIDFlowMode }>(), {
+  mode: 'embed',
+});
+const emit = defineEmits<{
+  complete: [payload: CompletePayload];
+  cancel: [];
+  error: [payload: ErrorPayload];
+}>();
+
+const host = ref<HTMLDivElement | null>(null);
+// Deliberately a plain binding, not a ref: the flow is not reactive state.
+let flow: ZinIDFlow | null = null;
+
+onMounted(() => {
+  if (props.mode === 'embed' && !host.value) return;
+  flow = createFlow({
+    url: props.sessionUrl,
+    mode: props.mode,
+    onComplete: (payload) => emit('complete', payload),
+    onCancel: () => emit('cancel'),
+    onError: (payload) => emit('error', payload),
+  });
+  // Modal and redirect ignore the target; embed needs it.
+  if (props.mode === 'embed' && host.value) flow.mount(host.value);
+});
+
+onBeforeUnmount(() => {
+  flow?.destroy();
+  flow = null;
+});
+
+defineExpose({
+  open: () => flow?.mount(),
+  close: () => flow?.close(),
+});
+</script>
+
+<template>
+  <div ref="host"></div>
+</template>
+```
+
+For modal or redirect, render the component and call the exposed `open()` from a user action rather
+than mounting on render — never navigate the page away just because a component appeared.
+
+## 3c. Angular integration
+
+`ngAfterViewInit` rather than `ngOnInit`, because the host element must exist before `mount()`.
+Angular's SSR (`@angular/ssr`) never runs `ngAfterViewInit` on the server, so no extra guard is
+needed.
+
+```ts
+import {
+  AfterViewInit,
+  Component,
+  ElementRef,
+  EventEmitter,
+  Input,
+  OnDestroy,
+  Output,
+  ViewChild,
+} from '@angular/core';
+import { createFlow } from '@zinid/sdk-web';
+import type { CompletePayload, ErrorPayload, ZinIDFlow, ZinIDFlowMode } from '@zinid/sdk-web';
+
+@Component({
+  selector: 'zinid-verification',
+  standalone: true,
+  template: '<div #host></div>',
+})
+export class VerificationComponent implements AfterViewInit, OnDestroy {
+  @Input({ required: true }) sessionUrl!: string;
+  @Input() mode: ZinIDFlowMode = 'embed';
+
+  @Output() complete = new EventEmitter<CompletePayload>();
+  @Output() cancelled = new EventEmitter<void>();
+  @Output() failed = new EventEmitter<ErrorPayload>();
+
+  @ViewChild('host') private host!: ElementRef<HTMLDivElement>;
+  // `| undefined` rather than `?`, so clearing it in ngOnDestroy still compiles
+  // under exactOptionalPropertyTypes.
+  private flow: ZinIDFlow | undefined;
+
+  ngAfterViewInit(): void {
+    this.flow = createFlow({
+      url: this.sessionUrl,
+      mode: this.mode,
+      onComplete: (payload) => this.complete.emit(payload),
+      onCancel: () => this.cancelled.emit(),
+      onError: (payload) => this.failed.emit(payload),
+    });
+    if (this.mode === 'embed') this.flow.mount(this.host.nativeElement);
+  }
+
+  /** Call from a user action for modal and redirect. */
+  open(): void {
+    this.flow?.mount();
+  }
+
+  close(): void {
+    this.flow?.close();
+  }
+
+  ngOnDestroy(): void {
+    this.flow?.destroy();
+    this.flow = undefined;
+  }
+}
+```
+
+Note `cancelled` and `failed` rather than `cancel` and `error`: an `@Output()` named `error` on a
+component shadows the native DOM `error` event and causes confusing behaviour when the host element
+also emits one.
 
 ### Script tag, if you would rather not bundle
 
