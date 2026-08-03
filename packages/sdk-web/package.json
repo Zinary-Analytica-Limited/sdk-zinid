@@ -1,6 +1,6 @@
 {
   "name": "@zinid/sdk-web",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Embed ZinID hosted identity verification in your web app — inline, modal, or redirect. Zero dependencies, TypeScript types included.",
   "keywords": [
     "zinid",
