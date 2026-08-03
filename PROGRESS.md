@@ -521,6 +521,35 @@ and `.example` — **a secret pasted into any of those is caught by neither gate
 secret scanning would close this, but it is a repository setting that cannot be enabled from code.
 **Enable it manually in repo settings.**
 
+## Publish readiness verified end to end (2026-08-03)
+
+CI now pins `pnpm` to 10.30.3 via `pnpm/action-setup`, matching the root `packageManager` field, so
+CI resolves the same pnpm as local development instead of the action's default major.
+
+The metadata was prepared earlier; this pass verified the **artifact a consumer actually receives**,
+by packing the tarball and installing it into a clean throwaway project:
+
+- Installs with **zero dependencies** and ships exactly `LICENSE`, `README.md`, `package.json` and
+  `dist/`.
+- **CJS** `require('@zinid/sdk-web')` returns `createFlow`, and its URL validation is reachable.
+- **ESM** `import { createFlow }` resolves.
+- **IIFE** evaluated in a bare VM context exposes the `ZinID` global with `createFlow` on it — the
+  CDN path.
+- **Types** resolve through the `types` field to `dist/zinid.d.ts` and compile under
+  `--strict --exactOptionalPropertyTypes`.
+
+`npm publish --dry-run` succeeds: **11 files, 41.9 kB packed / 152.4 kB unpacked**, and reports
+"with tag latest and **public access**", confirming `publishConfig.access` is honoured.
+
+### Before publishing — manual steps
+
+1. **`npm login`.** The machine is not authenticated (`npm whoami` → `ENEEDAUTH`).
+2. **The `@zinid` scope must exist on npm** and the publishing account be a member. `@zinid/sdk-web`
+   is currently **unpublished** (registry 404), so the name is free.
+3. **Confirm the MIT license.** It was chosen because none existed; that is a legal decision.
+4. Then `pnpm --filter @zinid/sdk-web publish` — `prepublishOnly` runs lint, typecheck, build, tests
+   and the size budget first, and blocks on failure.
+
 ## Phase 8 — next
 
 1. **Wire E2E into CI** with a `playwright install chromium` step. The contract spec needs no
