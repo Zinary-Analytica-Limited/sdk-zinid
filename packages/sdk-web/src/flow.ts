@@ -26,9 +26,22 @@ export const CLOSE_CONFIRM_TIMEOUT_MS = 2000;
 
 const MODES: ZinIDFlowMode[] = ['embed', 'modal', 'redirect'];
 
-const IFRAME_ALLOW = 'camera; microphone';
-
 const IFRAME_TITLE = 'Identity verification';
+
+/**
+ * Permission delegation for the verification iframe.
+ *
+ * The origin must be named. A bare `camera; microphone` delegates only to
+ * same-origin frames, so Chrome denies a cross-origin hosted page — and the
+ * camera-using frame nested inside it — with no error the SDK can observe. The
+ * user simply lands on a camera-blocked screen.
+ *
+ * Every iframe the SDK creates carries this, in every mode: an identity step
+ * can appear in any flow.
+ */
+export function frameAllow(hostedOrigin: string): string {
+  return `camera ${hostedOrigin}; microphone ${hostedOrigin}; fullscreen`;
+}
 
 /**
  * Floor for the embedded frame, so it never renders at zero and flashes empty
@@ -99,7 +112,9 @@ function createIframe(url: string, mode: ZinIDFlowMode): HTMLIFrameElement {
   // URL, a token, or a path.
   iframe.setAttribute('src', url);
   iframe.setAttribute('title', IFRAME_TITLE);
-  iframe.setAttribute('allow', IFRAME_ALLOW);
+  // Scoped to the hosted origin, derived from the session URL rather than
+  // hardcoded, so a different deployment still gets camera delegated.
+  iframe.setAttribute('allow', frameAllow(new URL(url).origin));
   // TODO(hardening): add a `sandbox` attribute once the hosted page's exact
   // requirements are known — the wrong token set silently breaks camera access.
   // Both modes are a fixed, viewport-bounded box. The hosted page scrolls its

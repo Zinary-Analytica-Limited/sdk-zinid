@@ -416,6 +416,38 @@ what the box actually resolves to in Chromium: 1000px viewport renders 720px, 60
 420px renders 399px. Mutation-verified — reverting the cap to `100%` fails the two clamping tests
 while the tall-viewport one correctly still passes.
 
+## Camera and microphone delegation (2026-08-01)
+
+The hosted page nests a **cross-origin** frame that uses the camera, so the permission must be
+delegated down the frame chain **by origin**. `createIframe` sets
+`allow="camera <hostedOrigin>; microphone <hostedOrigin>; fullscreen"`, with `<hostedOrigin>`
+derived from the session URL (`new URL(url).origin`) rather than hardcoded, so a different
+deployment still gets camera delegated to it.
+
+A bare `camera; microphone` delegates **same-origin only**. Chrome denies the cross-origin frame
+with nothing the SDK can observe — the user simply lands on a camera-blocked screen. That is why
+the origin-scoped form is not optional.
+
+Locked in by 9 tests covering embed and modal, every mount path (element, selector,
+`options.container`, modal), remount after `close()`, and modal reopen after cancel — plus
+assertions that the origin is derived rather than hardcoded, that the port survives, and that the
+bare form is never emitted. Mutation-verified: the bare form fails 9, dropping `allow` entirely
+fails 8, hardcoding the origin fails 2.
+
+### Known limitation — camera failures are not observable by the SDK
+
+**Camera-permission failures surface inside Didit's own cross-origin iframe**, which renders its own
+"camera access needed" UI at the point of failure. The hosted page cannot observe camera violations
+inside Didit's frame and therefore does not emit `zinid:error` for them, so there is nothing for the
+SDK to forward. **No detection or synthetic error has been built, deliberately** — any such thing
+would be guesswork about a frame we cannot see.
+
+Revisit only if Didit later exposes such an event through its SDK.
+
+The practical consequence is a vendor-integration risk, not an SDK bug: if the integrating site's
+own `Permissions-Policy` header omits camera for the ZinID iframe origin, **every** user hits the
+camera-blocked screen. Documented in the npm README as an integration requirement.
+
 ## Phase 8 — next
 
 1. **Wire E2E into CI** with a `playwright install chromium` step. The contract spec needs no

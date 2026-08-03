@@ -295,8 +295,8 @@ describe('createFlow', () => {
       make({ url: URL_ }).mount(host);
 
       const allow = (findIframe(host) as HTMLIFrameElement).getAttribute('allow') ?? '';
-      expect(allow).toMatch(/camera/);
-      expect(allow).toMatch(/microphone/);
+      expect(allow).toContain(`camera ${ORIGIN}`);
+      expect(allow).toContain(`microphone ${ORIGIN}`);
     });
 
     it('gives the iframe an accessible title', () => {
@@ -542,6 +542,122 @@ describe('createFlow', () => {
       deliverFrom(iframe, 'zinid:error', { code: 'not_found', message: 'anything at all' });
 
       expect(seen).toEqual(['not_found']);
+    });
+  });
+
+  describe('camera and microphone delegation', () => {
+    // The hosted page nests a cross-origin frame that uses the camera, so the
+    // permission has to be delegated down the chain *by origin*. A bare
+    // `camera; microphone` delegates same-origin only, which Chrome silently
+    // denies — the user just lands on a camera-blocked screen with nothing the
+    // SDK can observe. These tests exist so a refactor cannot quietly drop it.
+
+    /** Every iframe currently in the document, with its allow attribute. */
+    function allAllows(): string[] {
+      return [...document.querySelectorAll('iframe')].map((el) => el.getAttribute('allow') ?? '');
+    }
+
+    function expectDelegates(allow: string, origin: string) {
+      expect(allow).toContain(`camera ${origin}`);
+      expect(allow).toContain(`microphone ${origin}`);
+    }
+
+    it('delegates on an embedded iframe', () => {
+      const host = document.createElement('div');
+      document.body.append(host);
+      make({ url: URL_ }).mount(host);
+
+      expectDelegates((findIframe(host) as HTMLIFrameElement).getAttribute('allow') ?? '', ORIGIN);
+    });
+
+    it('delegates on a modal iframe', () => {
+      make({ url: URL_, mode: 'modal' }).mount();
+
+      expectDelegates((findIframe() as HTMLIFrameElement).getAttribute('allow') ?? '', ORIGIN);
+    });
+
+    it('derives the origin from the session url rather than hardcoding one', () => {
+      // A different deployment must still get camera delegated to *it*.
+      const host = document.createElement('div');
+      document.body.append(host);
+      make({ url: 'https://zinid-hosted-staging.zinarydevs.workers.dev/session/tok_abc' }).mount(
+        host,
+      );
+
+      const allow = (findIframe(host) as HTMLIFrameElement).getAttribute('allow') ?? '';
+      expectDelegates(allow, 'https://zinid-hosted-staging.zinarydevs.workers.dev');
+      expect(allow).not.toContain(ORIGIN);
+    });
+
+    it('keeps the port in the delegated origin', () => {
+      const host = document.createElement('div');
+      document.body.append(host);
+      make({ url: 'http://localhost:5173/session/tok' }).mount(host);
+
+      expectDelegates(
+        (findIframe(host) as HTMLIFrameElement).getAttribute('allow') ?? '',
+        'http://localhost:5173',
+      );
+    });
+
+    it('delegates to the origin only, never the full session url', () => {
+      // A path or query in the allow list is invalid and would be ignored.
+      const host = document.createElement('div');
+      document.body.append(host);
+      make({ url: URL_ }).mount(host);
+
+      const allow = (findIframe(host) as HTMLIFrameElement).getAttribute('allow') ?? '';
+      expect(allow).not.toContain('/s/abc123');
+      expect(allow).not.toContain('parent_origin');
+    });
+
+    it('is not the bare same-origin form, which Chrome will not delegate', () => {
+      const host = document.createElement('div');
+      document.body.append(host);
+      make({ url: URL_ }).mount(host);
+
+      const allow = (findIframe(host) as HTMLIFrameElement).getAttribute('allow') ?? '';
+      expect(allow).not.toBe('camera; microphone');
+      expect(allow).not.toMatch(/camera\s*(;|$)/);
+      expect(allow).not.toMatch(/microphone\s*(;|$)/);
+    });
+
+    // Exhaustive sweep of every path that can produce an iframe. If a future
+    // refactor adds a creation path that skips the attribute, one of these fails.
+    it('leaves no iframe without delegation, across every mount path', () => {
+      document.body.innerHTML = '<div id="a"></div><div id="b"></div>';
+      const viaElement = make({ url: URL_ });
+      viaElement.mount(document.querySelector('#a') as HTMLElement);
+      const viaSelector = make({ url: URL_ });
+      viaSelector.mount('#b');
+      const viaContainer = make({ url: URL_, container: '#a' });
+      viaContainer.mount();
+      const viaModal = make({ url: URL_, mode: 'modal' });
+      viaModal.mount();
+
+      const allows = allAllows();
+      expect(allows).toHaveLength(4);
+      for (const allow of allows) expectDelegates(allow, ORIGIN);
+    });
+
+    it('still delegates on a frame recreated by remounting', () => {
+      const host = document.createElement('div');
+      document.body.append(host);
+      const flow = make({ url: URL_ });
+      flow.mount(host);
+      flow.close();
+      flow.mount(host);
+
+      expectDelegates((findIframe(host) as HTMLIFrameElement).getAttribute('allow') ?? '', ORIGIN);
+    });
+
+    it('still delegates on a modal reopened after cancel', () => {
+      const flow = make({ url: URL_, mode: 'modal' });
+      flow.mount();
+      deliverFrom(findIframe() as HTMLIFrameElement, 'zinid:cancel');
+      flow.mount();
+
+      expectDelegates((findIframe() as HTMLIFrameElement).getAttribute('allow') ?? '', ORIGIN);
     });
   });
 
