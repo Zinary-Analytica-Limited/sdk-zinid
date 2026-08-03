@@ -225,7 +225,7 @@ the browser strips the permission before it reaches the flow and every user hits
 screen:
 
 ```
-Permissions-Policy: camera=(self "https://verify.zinid.com"), microphone=(self "https://verify.zinid.com")
+Permissions-Policy: camera=(self "https://verify.zinid.africa"), microphone=(self "https://verify.zinid.africa")
 ```
 
 Replace the origin with the origin of the session URL your backend returns. This is a normal
