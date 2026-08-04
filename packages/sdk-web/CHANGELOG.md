@@ -44,7 +44,3 @@ Initial release.
   server.
 - Zero runtime dependencies. ESM, CJS, a minified IIFE exposing a `ZinID` global for CDN use, and
   TypeScript declarations.
-
-[unreleased]: https://github.com/Zinary-Analytica-Limited/sdk-zinid/compare/main...HEAD
-[0.1.1]: https://github.com/Zinary-Analytica-Limited/sdk-zinid/releases/tag/v0.1.1
-[0.1.0]: https://github.com/Zinary-Analytica-Limited/sdk-zinid/releases/tag/v0.1.0
